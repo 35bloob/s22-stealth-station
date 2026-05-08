@@ -24,6 +24,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repo
@@ -37,45 +39,65 @@ jobs:
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libncurses-dev
 
       - name: Download kernel source
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          RELEASE_URL=$(curl -sL \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/kernel-source" \
-            | grep browser_download_url | head -1 | cut -d'"' -f4) || true
-
-          if [ -n "$RELEASE_URL" ]; then
-            echo "Downloading from GitHub Release..."
-            curl -L -o kernel_source.zip "$RELEASE_URL"
-          elif [ -n "${{ secrets.KERNEL_SOURCE_URL }}" ]; then
-            echo "Downloading from secret URL..."
-            curl -L -o kernel_source.zip "${{ secrets.KERNEL_SOURCE_URL }}"
+          echo "=== Downloading from kernel-source release ==="
+          gh release download kernel-source --dir .
+          echo "=== Downloaded files ==="
+          ls -lh
+          ARCHIVE=$(ls *.zip 2>/dev/null || ls *.tar.gz 2>/dev/null)
+          ARCHIVE=$(echo "$ARCHIVE" | head -1)
+          echo "Using archive: $ARCHIVE"
+          mkdir -p kernel_src && cd kernel_src
+          if echo "$ARCHIVE" | grep -qi "\.zip$"; then
+            unzip "../$ARCHIVE"
           else
-            echo "ERROR: No kernel source found!"
-            echo "Upload to Releases with tag 'kernel-source' or set KERNEL_SOURCE_URL secret"
+            tar xf "../$ARCHIVE"
+          fi
+          echo "=== Top-level contents ==="
+          ls -la
+          if [ -f Kernel.tar.gz ]; then
+            echo "Found Kernel.tar.gz, extracting..."
+            tar xzf Kernel.tar.gz
+          fi
+          if [ -f kernel.tar.gz ]; then
+            echo "Found kernel.tar.gz, extracting..."
+            tar xzf kernel.tar.gz
+          fi
+          for f in *.tar.gz; do
+            if [ -f "$f" ]; then
+              echo "Extracting $f..."
+              tar xzf "$f" || true
+            fi
+          done
+          echo "=== After extraction ==="
+          ls -la
+          KDIR=$(find . -maxdepth 3 -name "Makefile" -exec grep -l "^VERSION" {} \; 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+          if [ -z "$KDIR" ]; then
+            KDIR=$(find . -maxdepth 4 -name "Makefile" | head -1 | xargs dirname 2>/dev/null)
+          fi
+          if [ -z "$KDIR" ]; then
+            echo "ERROR: Could not find kernel Makefile"
+            find . -maxdepth 3 -type f -name "Makefile" | head -20
             exit 1
           fi
-
-          mkdir -p kernel_src && cd kernel_src
-          if file ../kernel_source.zip | grep -q "Zip"; then
-            unzip ../kernel_source.zip
-          else
-            tar xf ../kernel_source.zip
-          fi
-
-          KDIR=$(find . -name "Makefile" -path "*/Makefile" | head -1 | xargs dirname)
-          if [ -z "$KDIR" ]; then
-            echo "ERROR: Could not find kernel Makefile"; ls -la; exit 1
-          fi
-          echo "KERNEL_DIR=$(pwd)/$KDIR" >> $GITHUB_ENV
-          echo "Found kernel at: $KDIR"
+          FULL_KDIR=$(cd "$KDIR" && pwd)
+          echo "KERNEL_DIR=$FULL_KDIR" >> $GITHUB_ENV
+          echo "Found kernel at: $FULL_KDIR"
 
       - name: Apply NetHunter config
         run: |
           cd ${{ env.KERNEL_DIR }}
-          DEFCONFIG=$(find arch/arm64/configs -name "*s5e9925*" -o -name "*s901e*" -o -name "*exynos*" 2>/dev/null | head -1)
+          echo "=== Available defconfigs ==="
+          ls arch/arm64/configs/ | head -20
+          DEFCONFIG=$(find arch/arm64/configs -name "*s5e9925*" -o -name "*s901e*" -o -name "*exynos2200*" 2>/dev/null | head -1)
+          [ -z "$DEFCONFIG" ] && DEFCONFIG=$(find arch/arm64/configs -name "*s901*" 2>/dev/null | head -1)
+          [ -z "$DEFCONFIG" ] && DEFCONFIG=$(find arch/arm64/configs -name "*exynos*" 2>/dev/null | head -1)
           [ -z "$DEFCONFIG" ] && DEFCONFIG=$(find arch/arm64/configs -name "*_defconfig" | head -1)
-          echo "Using defconfig: $DEFCONFIG"
-          cp "$DEFCONFIG" arch/arm64/configs/stealth_defconfig
+          DEFCONFIG_NAME=$(basename "$DEFCONFIG")
+          echo "Using defconfig: $DEFCONFIG_NAME"
+          cp arch/arm64/configs/$DEFCONFIG_NAME arch/arm64/configs/stealth_defconfig
           cat ${{ github.workspace }}/configs/nethunter_fragment.config >> arch/arm64/configs/stealth_defconfig
           if [ "${{ inputs.extra_features }}" = "true" ]; then
             cat ${{ github.workspace }}/configs/extra_features.config >> arch/arm64/configs/stealth_defconfig
@@ -96,20 +118,23 @@ jobs:
           export PLATFORM_VERSION=13
           export ANDROID_MAJOR_VERSION=t
           make O=out stealth_defconfig
-          make O=out -j$(nproc) Image 2>&1 | tail -50
-          echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
+          make O=out -j$(nproc) Image 2>&1 | tail -100
+          if [ -f out/arch/arm64/boot/Image ]; then
+            echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
+          else
+            echo "BUILD FAILED"
+            exit 1
+          fi
 
       - name: Package output
         if: env.BUILD_SUCCESS == 'true'
         run: |
           cd ${{ env.KERNEL_DIR }}
           mkdir -p ${{ github.workspace }}/output
-          cp out/arch/arm64/boot/Image ${{ github.workspace }}/output/ 2>/dev/null || true
-          cp out/arch/arm64/boot/Image.gz ${{ github.workspace }}/output/ 2>/dev/null || true
           cp out/arch/arm64/boot/Image ${{ github.workspace }}/output/boot_image_raw.img 2>/dev/null || true
-          cp ${{ env.KERNEL_DIR }}/out/.config ${{ github.workspace }}/output/kernel_config.txt 2>/dev/null || true
-          echo "Build completed at $(date)"
-          ls -la ${{ github.workspace }}/output/
+          cp out/arch/arm64/boot/Image.gz ${{ github.workspace }}/output/Image.gz 2>/dev/null || true
+          cp out/.config ${{ github.workspace }}/output/kernel_config.txt 2>/dev/null || true
+          ls -lh ${{ github.workspace }}/output/
 
       - name: Upload artifact
         if: env.BUILD_SUCCESS == 'true'
