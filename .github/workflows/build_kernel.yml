@@ -1,0 +1,120 @@
+name: Build S22 NetHunter Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernelsu:
+        description: 'Enable KernelSU'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      extra_features:
+        description: 'Enable extra stealth features'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc flex bison libssl-dev \
+            libelf-dev git curl wget zip unzip python3 device-tree-compiler \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libncurses-dev
+
+      - name: Download kernel source
+        run: |
+          RELEASE_URL=$(curl -sL \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/kernel-source" \
+            | grep browser_download_url | head -1 | cut -d'"' -f4) || true
+
+          if [ -n "$RELEASE_URL" ]; then
+            echo "Downloading from GitHub Release..."
+            curl -L -o kernel_source.zip "$RELEASE_URL"
+          elif [ -n "${{ secrets.KERNEL_SOURCE_URL }}" ]; then
+            echo "Downloading from secret URL..."
+            curl -L -o kernel_source.zip "${{ secrets.KERNEL_SOURCE_URL }}"
+          else
+            echo "ERROR: No kernel source found!"
+            echo "Upload to Releases with tag 'kernel-source' or set KERNEL_SOURCE_URL secret"
+            exit 1
+          fi
+
+          mkdir -p kernel_src && cd kernel_src
+          if file ../kernel_source.zip | grep -q "Zip"; then
+            unzip ../kernel_source.zip
+          else
+            tar xf ../kernel_source.zip
+          fi
+
+          KDIR=$(find . -name "Makefile" -path "*/Makefile" | head -1 | xargs dirname)
+          if [ -z "$KDIR" ]; then
+            echo "ERROR: Could not find kernel Makefile"; ls -la; exit 1
+          fi
+          echo "KERNEL_DIR=$(pwd)/$KDIR" >> $GITHUB_ENV
+          echo "Found kernel at: $KDIR"
+
+      - name: Apply NetHunter config
+        run: |
+          cd ${{ env.KERNEL_DIR }}
+          DEFCONFIG=$(find arch/arm64/configs -name "*s5e9925*" -o -name "*s901e*" -o -name "*exynos*" 2>/dev/null | head -1)
+          [ -z "$DEFCONFIG" ] && DEFCONFIG=$(find arch/arm64/configs -name "*_defconfig" | head -1)
+          echo "Using defconfig: $DEFCONFIG"
+          cp "$DEFCONFIG" arch/arm64/configs/stealth_defconfig
+          cat ${{ github.workspace }}/configs/nethunter_fragment.config >> arch/arm64/configs/stealth_defconfig
+          if [ "${{ inputs.extra_features }}" = "true" ]; then
+            cat ${{ github.workspace }}/configs/extra_features.config >> arch/arm64/configs/stealth_defconfig
+          fi
+
+      - name: Patch KernelSU
+        if: inputs.kernelsu == 'true'
+        run: |
+          cd ${{ env.KERNEL_DIR }}
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+          echo -e "CONFIG_KPROBES=y\nCONFIG_HAVE_KPROBES=y\nCONFIG_KPROBE_EVENTS=y" >> arch/arm64/configs/stealth_defconfig
+
+      - name: Build kernel
+        run: |
+          cd ${{ env.KERNEL_DIR }}
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export PLATFORM_VERSION=13
+          export ANDROID_MAJOR_VERSION=t
+          make O=out stealth_defconfig
+          make O=out -j$(nproc) Image 2>&1 | tail -50
+          echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
+
+      - name: Package output
+        if: env.BUILD_SUCCESS == 'true'
+        run: |
+          cd ${{ env.KERNEL_DIR }}
+          mkdir -p ${{ github.workspace }}/output
+          cp out/arch/arm64/boot/Image ${{ github.workspace }}/output/ 2>/dev/null || true
+          cp out/arch/arm64/boot/Image.gz ${{ github.workspace }}/output/ 2>/dev/null || true
+          cp out/arch/arm64/boot/Image ${{ github.workspace }}/output/boot_image_raw.img 2>/dev/null || true
+          cp ${{ env.KERNEL_DIR }}/out/.config ${{ github.workspace }}/output/kernel_config.txt 2>/dev/null || true
+          echo "Build completed at $(date)"
+          ls -la ${{ github.workspace }}/output/
+
+      - name: Upload artifact
+        if: env.BUILD_SUCCESS == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: S22-StealthStation-Kernel
+          path: output/
+          retention-days: 30
