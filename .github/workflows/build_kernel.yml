@@ -108,6 +108,7 @@ jobs:
           if [ "${{ inputs.extra_features }}" = "true" ]; then
             cat ${{ github.workspace }}/configs/extra_features.config >> arch/arm64/configs/stealth_defconfig
           fi
+          echo "CONFIG_WERROR=n" >> arch/arm64/configs/stealth_defconfig
           echo "Total lines: $(wc -l < arch/arm64/configs/stealth_defconfig)"
 
       - name: Patch KernelSU
@@ -126,7 +127,7 @@ jobs:
           export PLATFORM_VERSION=13
           export ANDROID_MAJOR_VERSION=t
           make O=out stealth_defconfig
-          make O=out -j$(nproc) Image 2>&1 | tail -100
+          make O=out -j$(nproc) KCFLAGS="-Wno-error" Image 2>&1 | tail -200
           if [ -f out/arch/arm64/boot/Image ]; then
             echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
           else
