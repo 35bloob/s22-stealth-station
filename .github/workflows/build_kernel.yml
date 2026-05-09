@@ -119,6 +119,20 @@ jobs:
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
           echo -e "CONFIG_KPROBES=y\nCONFIG_HAVE_KPROBES=y\nCONFIG_KPROBE_EVENTS=y" >> arch/arm64/configs/stealth_defconfig
 
+      - name: Patch kernel source errors
+        run: |
+          cd ${{ env.KERNEL_DIR }}
+          # Fix psi.c: u64 args need %llu not %lu on arm64
+          PSI=kernel/sched/psi.c
+          if [ -f "$PSI" ]; then
+            echo "Patching $PSI"
+            sed -i 's/psi: %s %lu %lu %d %lu %lu/psi: %s %llu %llu %d %llu %llu/' "$PSI"
+            echo "Done. Verify:"
+            grep -n "psi: %s" "$PSI"
+          else
+            echo "WARNING: $PSI not found, skipping"
+          fi
+
       - name: Build kernel
         run: |
           cd ${{ env.KERNEL_DIR }}
@@ -127,7 +141,7 @@ jobs:
           export PLATFORM_VERSION=13
           export ANDROID_MAJOR_VERSION=t
           make O=out stealth_defconfig
-          make O=out -j$(nproc) KCFLAGS="-Wno-error" Image 2>&1 | tail -200
+          make O=out -j$(nproc) Image 2>&1 | tail -200
           if [ -f out/arch/arm64/boot/Image ]; then
             echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
           else
