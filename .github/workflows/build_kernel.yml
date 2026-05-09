@@ -120,6 +120,19 @@ jobs:
                           open(fpath, 'w').write(t)
                           print(f'PATCHED {fpath}')
           print()
+          print('=== PATCHING f2fs flush_group ===')
+          for root, dirs, files in os.walk('fs/f2fs'):
+              for fname in files:
+                  if fname == 'data.c':
+                      fpath = os.path.join(root, fname)
+                      t = open(fpath).read()
+                      if 'flush_group' in t:
+                          t = t.replace('in_group_p(F2FS_OPTION(sbi).flush_group)', '0')
+                          open(fpath, 'w').write(t)
+                          print(f'PATCHED {fpath} (flush_group -> 0)')
+                      else:
+                          print(f'SKIP {fpath} (no flush_group)')
+          print()
           print('=== REPLACING cc-wrapper.c WITH PASS-THROUGH ===')
           for root, dirs, files in os.walk('scripts'):
               for fname in files:
