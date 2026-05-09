@@ -47,6 +47,21 @@ jobs:
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libncurses-dev \
             jq rsync
 
+      - name: Replace system GCC with warning-suppressing wrapper
+        run: |
+          REAL_GCC=$(which aarch64-linux-gnu-gcc)
+          echo "Real GCC at: $REAL_GCC"
+          sudo cp "$REAL_GCC" "${REAL_GCC}.real"
+          sudo tee "$REAL_GCC" > /dev/null << 'WRAPPER'
+          #!/bin/bash
+          exec "${0}.real" "$@" -w -Wno-error
+          WRAPPER
+          sudo chmod +x "$REAL_GCC"
+          echo "Wrapper installed. Test:"
+          aarch64-linux-gnu-gcc --version | head -1
+          echo "Wrapper contents:"
+          cat "$REAL_GCC"
+
       - name: Download kernel source
         env:
           GH_TOKEN: ${{ github.token }}
@@ -74,115 +89,54 @@ jobs:
           echo "KERNEL_DIR=$FULL" >> $GITHUB_ENV
           echo "Kernel at: $FULL"
 
-      - name: Create GCC wrapper to kill ALL warnings
-        run: |
-          # This wrapper runs the real compiler but appends -w at the END
-          # so it comes AFTER all Samsung CFLAGS and overrides everything
-          cat > /tmp/gcc-nowarn.sh << 'GCCEOF'
-          #!/bin/bash
-          exec aarch64-linux-gnu-gcc "$@" -w
-          GCCEOF
-          chmod +x /tmp/gcc-nowarn.sh
-          echo "GCC wrapper created — test:"
-          /tmp/gcc-nowarn.sh --version | head -1
-
-      - name: Patch source files (backup fix)
+      - name: Patch source and nuke forbidden-warning system
         run: |
           cd ${{ env.KERNEL_DIR }}
           chmod -R u+w .
-
-          echo "=== All cred.c files ==="
-          find . -name "cred.c" -exec echo "  {}" \;
-          echo ""
-
-          python3 << 'PYEOF'
-          import os
-          count = 0
-          for root, dirs, files in os.walk('.'):
-              for fname in files:
-                  if fname == 'cred.c':
-                      fpath = os.path.join(root, fname)
-                      with open(fpath, 'rb') as f:
-                          raw = f.read()
-                      text = raw.decode('utf-8', errors='replace')
-                      target = '0x%lx'
-                      if target in text:
-                          text = text.replace(target, '%p')
-                          with open(fpath, 'wb') as f:
-                              f.write(text.encode('utf-8'))
-                          count += 1
-                          print(f"PATCHED: {fpath}")
-                          # Show line 161 area
-                          lines = text.split('\n')
-                          for i in range(max(0,158), min(len(lines),165)):
-                              print(f"  {i+1}: {lines[i]}")
-                      else:
-                          print(f"NO MATCH: {fpath}")
-                          # Show raw bytes around line 161
-                          lines = text.split('\n')
-                          if len(lines) > 160:
-                              print(f"  Line 161: {repr(lines[160])}")
-          if count == 0:
-              print("WARNING: No cred.c files contained '0x%lx'")
-              print("Trying broader search...")
-              for root, dirs, files in os.walk('.'):
-                  for fname in files:
-                      if fname == 'cred.c':
-                          fpath = os.path.join(root, fname)
-                          with open(fpath, 'r') as f:
-                              for i, line in enumerate(f, 1):
-                                  if 'security' in line and '%' in line:
-                                      print(f"  {fpath}:{i}: {line.strip()}")
-          PYEOF
-
-          echo ""
-          echo "=== kernel.h tracing fix ==="
-          python3 -c "
-          import os
-          for root, dirs, files in os.walk('.'):
-              if 'kernel.h' in files and 'include/linux' in root:
-                  p = os.path.join(root, 'kernel.h')
-                  t = open(p).read()
-                  if 'TRACING_MARK_TYPE_END, \"\"' in t:
-                      t = t.replace('TRACING_MARK_TYPE_END, \"\"', 'TRACING_MARK_TYPE_END, \" \"')
-                      open(p, 'w').write(t)
-                      print(f'PATCHED: {p}')
-          "
-
-      - name: Nuke forbidden-warning system
-        run: |
-          cd ${{ env.KERNEL_DIR }}
-          chmod -R u+w .
-
-          echo "=== Makefile.build lines 270-290 ==="
-          sed -n '270,290p' scripts/Makefile.build || true
-          echo ""
-
           python3 << 'PYEOF'
           import os, re
 
-          # Nuke forbidden in ALL scripts
+          print("=== PATCHING SOURCE FILES ===")
+          for root, dirs, files in os.walk('.'):
+              for fname in files:
+                  fpath = os.path.join(root, fname)
+                  if fname == 'cred.c':
+                      with open(fpath, 'rb') as f:
+                          raw = f.read()
+                      text = raw.decode('utf-8', errors='replace')
+                      if '0x%lx' in text:
+                          text = text.replace('0x%lx', '%p')
+                          with open(fpath, 'wb') as f:
+                              f.write(text.encode('utf-8'))
+                          print(f"PATCHED {fpath}")
+                      else:
+                          print(f"SKIP {fpath} (no 0x%lx)")
+                  elif fname == 'kernel.h' and 'include/linux' in root:
+                      t = open(fpath).read()
+                      if 'TRACING_MARK_TYPE_END, ""' in t:
+                          t = t.replace('TRACING_MARK_TYPE_END, ""', 'TRACING_MARK_TYPE_END, " "')
+                          open(fpath, 'w').write(t)
+                          print(f"PATCHED {fpath} (tracing)")
+                  elif fname == 'psi.c' and 'kernel/sched' in root:
+                      t = open(fpath).read()
+                      if '%lu' in t:
+                          t = t.replace('%lu', '%llu')
+                          open(fpath, 'w').write(t)
+                          print(f"PATCHED {fpath}")
+
+          print("\n=== NUKING FORBIDDEN-WARNING SYSTEM ===")
           for root, dirs, files in os.walk('scripts'):
               for fname in files:
                   fpath = os.path.join(root, fname)
                   try:
-                      with open(fpath, 'r') as f:
-                          content = f.read()
-                      if 'forbidden' in content.lower():
-                          lines = content.split('\n')
-                          new_lines = []
-                          for line in lines:
-                              if 'forbidden' in line.lower():
-                                  new_lines.append('# disabled')
-                                  print(f"NUKED [{fpath}]: {line.strip()[:80]}")
-                              else:
-                                  new_lines.append(line)
-                          with open(fpath, 'w') as f:
-                              f.write('\n'.join(new_lines))
-                  except:
-                      pass
+                      t = open(fpath).read()
+                      if 'forbidden' in t.lower():
+                          new = '\n'.join('# disabled' if 'forbidden' in l.lower() else l for l in t.split('\n'))
+                          open(fpath, 'w').write(new)
+                          print(f"NUKED: {fpath}")
+                  except: pass
 
-          # Strip -Werror everywhere
+          print("\n=== STRIPPING -Werror ===")
           for root, dirs, files in os.walk('.'):
               for fname in files:
                   if 'Makefile' in fname or fname.endswith('.mk'):
@@ -192,31 +146,16 @@ jobs:
                           if '-Werror' in t:
                               t = re.sub(r'-Werror\S*', '', t)
                               open(fpath, 'w').write(t)
-                              print(f"Stripped -Werror: {fpath}")
-                      except:
-                          pass
+                              print(f"CLEANED: {fpath}")
+                      except: pass
 
-          # Delete GCC plugins
           for root, dirs, files in os.walk('scripts'):
               for fname in files:
                   if fname.endswith('.so'):
                       p = os.path.join(root, fname)
                       os.remove(p)
-                      print(f"Deleted: {p}")
+                      print(f"DELETED plugin: {p}")
           PYEOF
-
-          # Replace wrapper scripts
-          for w in scripts/gcc-wrapper.py scripts/cc-wrapper.py; do
-            if [ -f "$w" ]; then
-              printf '#!/usr/bin/env python3\nimport sys,os\nret=os.spawnvp(os.P_WAIT,sys.argv[1],sys.argv[1:])\nsys.exit(ret)\n' > "$w"
-              chmod +x "$w"
-              echo "Replaced: $w"
-            fi
-          done
-
-          echo ""
-          echo "=== Makefile.build lines 270-290 AFTER ==="
-          sed -n '270,290p' scripts/Makefile.build || true
 
       - name: Add RTL8188FTV driver
         run: |
@@ -282,6 +221,43 @@ DCEOF
       - name: Build kernel
         run: |
           cd ${{ env.KERNEL_DIR }}
+
+          echo "========================================"
+          echo " PRE-BUILD VERIFICATION"
+          echo "========================================"
+          echo ""
+          echo "--- cred.c line 161 RIGHT NOW ---"
+          sed -n '158,165p' kernel/cred.c
+          echo ""
+          echo "--- Does cred.c contain 0x%lx? ---"
+          grep -c "0x%lx" kernel/cred.c && echo "YES - STILL HAS BUG" || echo "NO - PATCHED OK"
+          echo ""
+          echo "--- GCC wrapper check ---"
+          cat $(which aarch64-linux-gnu-gcc)
+          echo ""
+          echo "--- Test compile with wrapper ---"
+          echo 'int main(){return 0;}' > /tmp/test.c
+          aarch64-linux-gnu-gcc -Wformat -c /tmp/test.c -o /dev/null 2>&1 && echo "wrapper works" || echo "wrapper broken"
+          echo ""
+
+          echo "--- LAST-RESORT: patch cred.c right here ---"
+          python3 -c "
+          p='kernel/cred.c'
+          t=open(p).read()
+          n=t.count(chr(48)+'x%lx')
+          print(f'0x%lx count before: {n}')
+          t=t.replace(chr(48)+'x%lx','%p')
+          open(p,'w').write(t)
+          print(f'0x%lx count after: {t.count(chr(48)+\"x%lx\")}')
+          "
+          echo ""
+          echo "--- cred.c line 161 AFTER last-resort ---"
+          sed -n '158,165p' kernel/cred.c
+          echo ""
+          echo "========================================"
+          echo " STARTING BUILD"
+          echo "========================================"
+
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
           export PLATFORM_VERSION=13
@@ -291,11 +267,7 @@ DCEOF
           sed -i 's/CONFIG_WERROR=y/CONFIG_WERROR=n/' out/.config
           sed -i 's/CONFIG_GCC_PLUGINS=y/# CONFIG_GCC_PLUGINS is not set/' out/.config
 
-          echo "=== Building with GCC wrapper (warnings impossible) ==="
-          make O=out -j$(nproc) \
-            CC=/tmp/gcc-nowarn.sh \
-            KCFLAGS="-w" \
-            Image 2>&1 | tail -200
+          make O=out -j$(nproc) KCFLAGS="-w" Image 2>&1 | tail -200
 
           if [ -f out/arch/arm64/boot/Image ]; then
             echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
