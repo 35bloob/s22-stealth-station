@@ -168,9 +168,7 @@ jobs:
           if [ -d /tmp/rtl8188fu ]; then
             mkdir -p drivers/net/wireless/rtl8188fu
             cp -r /tmp/rtl8188fu/* drivers/net/wireless/rtl8188fu/
-            if [ ! -f drivers/net/wireless/rtl8188fu/Kconfig ]; then
-              printf 'config RTL8188FU\n  tristate "Realtek RTL8188FU USB WiFi"\n  depends on USB && CFG80211\n  help\n    Enable support for Realtek RTL8188FU/FTV USB WiFi adapters.\n' > drivers/net/wireless/rtl8188fu/Kconfig
-            fi
+            printf 'config RTL8188FU\n  tristate "Realtek RTL8188FU USB WiFi"\n  depends on USB && CFG80211\n  help\n    Enable support for Realtek RTL8188FU/FTV USB WiFi adapters.\n' > drivers/net/wireless/rtl8188fu/Kconfig
             grep -q "rtl8188fu" drivers/net/wireless/Makefile 2>/dev/null || \
               echo 'obj-$(CONFIG_RTL8188FU) += rtl8188fu/' >> drivers/net/wireless/Makefile
             grep -q "rtl8188fu" drivers/net/wireless/Kconfig 2>/dev/null || \
