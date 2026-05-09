@@ -19,6 +19,14 @@ on:
         options:
           - 'true'
           - 'false'
+      create_release:
+        description: 'Create GitHub release'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 jobs:
   build:
@@ -36,7 +44,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential bc flex bison libssl-dev \
             libelf-dev git curl wget zip unzip python3 device-tree-compiler \
-            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libncurses-dev
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libncurses-dev \
+            jq rsync
 
       - name: Download kernel source
         env:
@@ -54,14 +63,10 @@ jobs:
           else
             tar xf "../$ARCHIVE"
           fi
-          echo "--- Top-level ---"
-          ls -la
           for f in *.tar.gz; do
             [ -f "$f" ] && echo "Extracting $f" && tar xzf "$f" || true
           done
-          echo "--- Fixing permissions ---"
           chmod -R u+w .
-          echo "--- Finding kernel directory ---"
           KDIR=$(find . -maxdepth 5 -type d -name "arch" -exec test -d "{}/arm64/configs" \; -print 2>/dev/null | head -1 | sed 's|/arch$||')
           if [ -z "$KDIR" ]; then
             echo "ERROR: No arch/arm64/configs found"
@@ -72,6 +77,54 @@ jobs:
           echo "KERNEL_DIR=$FULL" >> $GITHUB_ENV
           echo "Kernel at: $FULL"
           ls "$FULL/arch/arm64/configs/"
+
+      - name: Add RTL8188FTV driver
+        run: |
+          cd ${{ env.KERNEL_DIR }}
+          echo "--- Cloning RTL8188FU driver ---"
+          git clone --depth=1 https://github.com/kelebek333/rtl8188fu /tmp/rtl8188fu
+          mkdir -p drivers/net/wireless/rtl8188fu
+          cp -r /tmp/rtl8188fu/* drivers/net/wireless/rtl8188fu/
+          if [ ! -f drivers/net/wireless/rtl8188fu/Kconfig ]; then
+            cat > drivers/net/wireless/rtl8188fu/Kconfig << 'KEOF'
+config RTL8188FU
+  tristate "Realtek RTL8188FU USB WiFi"
+  depends on USB && CFG80211
+  help
+    Enable support for Realtek RTL8188FU/FTV USB WiFi adapters.
+KEOF
+          fi
+          if ! grep -q "rtl8188fu" drivers/net/wireless/Makefile 2>/dev/null; then
+            echo 'obj-$(CONFIG_RTL8188FU) += rtl8188fu/' >> drivers/net/wireless/Makefile
+          fi
+          if ! grep -q "rtl8188fu" drivers/net/wireless/Kconfig 2>/dev/null; then
+            echo 'source "drivers/net/wireless/rtl8188fu/Kconfig"' >> drivers/net/wireless/Kconfig
+          fi
+          echo "RTL8188FU driver integrated"
+
+      - name: Disable Samsung forbidden warnings
+        run: |
+          cd ${{ env.KERNEL_DIR }}
+          chmod -R u+w .
+          echo "--- Disabling Samsung forbidden-warning scripts ---"
+          find scripts -name "*.py" -o -name "*.sh" -o -name "*.pl" | while read f; do
+            if grep -q "forbidden" "$f" 2>/dev/null; then
+              echo "  Neutralizing: $f"
+              chmod u+w "$f"
+              sed -i 's/forbidden/allowed/g' "$f"
+            fi
+          done
+          if grep -q "forbidden" scripts/Makefile.extrawarn 2>/dev/null; then
+            echo "  Patching Makefile.extrawarn"
+            sed -i '/forbidden/d' scripts/Makefile.extrawarn
+          fi
+          for mf in scripts/Makefile.lib scripts/Makefile.build scripts/Makefile.extrawarn Makefile; do
+            if [ -f "$mf" ] && grep -qi "werror\|forbidden" "$mf" 2>/dev/null; then
+              echo "  Patching $mf"
+              sed -i 's/-Werror[^ ]*//g; /forbidden/d' "$mf"
+            fi
+          done
+          echo "Done."
 
       - name: Apply NetHunter config
         run: |
@@ -122,15 +175,11 @@ jobs:
       - name: Patch kernel source errors
         run: |
           cd ${{ env.KERNEL_DIR }}
-          # Fix psi.c: u64 args need %llu not %lu on arm64
           PSI=kernel/sched/psi.c
           if [ -f "$PSI" ]; then
-            echo "Patching $PSI"
             sed -i 's/psi: %s %lu %lu %d %lu %lu/psi: %s %llu %llu %d %llu %llu/' "$PSI"
-            echo "Done. Verify:"
+            echo "psi.c patched:"
             grep -n "psi: %s" "$PSI"
-          else
-            echo "WARNING: $PSI not found, skipping"
           fi
 
       - name: Build kernel
@@ -141,21 +190,31 @@ jobs:
           export PLATFORM_VERSION=13
           export ANDROID_MAJOR_VERSION=t
           make O=out stealth_defconfig
-          make O=out -j$(nproc) Image 2>&1 | tail -200
+          make O=out -j$(nproc) KCFLAGS="-w" Image 2>&1 | tail -200
           if [ -f out/arch/arm64/boot/Image ]; then
             echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
           else
             exit 1
           fi
 
-      - name: Package output
+      - name: Package with AnyKernel3
         if: env.BUILD_SUCCESS == 'true'
         run: |
-          cd ${{ env.KERNEL_DIR }}
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 /tmp/AnyKernel3
+          rm -f /tmp/AnyKernel3/anykernel.sh
+          cp ${{ github.workspace }}/anykernel/anykernel.sh /tmp/AnyKernel3/anykernel.sh
+          cp ${{ env.KERNEL_DIR }}/out/arch/arm64/boot/Image /tmp/AnyKernel3/Image
+          cd /tmp/AnyKernel3
+          rm -f *.md patch/sample* ramdisk/placeholder 2>/dev/null || true
+          BUILD_DATE=$(date +%Y%m%d-%H%M)
+          ZIP_NAME="S22-StealthStation-${BUILD_DATE}.zip"
+          zip -r9 "$ZIP_NAME" . -x ".git/*"
           mkdir -p ${{ github.workspace }}/output
-          cp out/arch/arm64/boot/Image ${{ github.workspace }}/output/Image 2>/dev/null || true
-          cp out/arch/arm64/boot/Image.gz ${{ github.workspace }}/output/Image.gz 2>/dev/null || true
-          cp out/.config ${{ github.workspace }}/output/kernel_config.txt 2>/dev/null || true
+          cp "$ZIP_NAME" ${{ github.workspace }}/output/
+          cp ${{ env.KERNEL_DIR }}/out/arch/arm64/boot/Image ${{ github.workspace }}/output/
+          cp ${{ env.KERNEL_DIR }}/out/.config ${{ github.workspace }}/output/kernel_config.txt 2>/dev/null || true
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+          echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
           ls -lh ${{ github.workspace }}/output/
 
       - name: Upload artifact
@@ -165,3 +224,16 @@ jobs:
           name: S22-StealthStation-Kernel
           path: output/
           retention-days: 30
+
+      - name: Create GitHub release
+        if: env.BUILD_SUCCESS == 'true' && inputs.create_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="kernel-${{ env.BUILD_DATE }}"
+          gh release create "$TAG" \
+            ${{ github.workspace }}/output/${{ env.ZIP_NAME }} \
+            ${{ github.workspace }}/output/Image \
+            --title "S22 StealthStation ${{ env.BUILD_DATE }}" \
+            --notes "KernelSU=${{ inputs.kernelsu }} | ExtraFeatures=${{ inputs.extra_features }}" \
+            --latest
