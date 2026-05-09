@@ -133,32 +133,32 @@ jobs:
                       else:
                           print(f'SKIP {fpath} (no flush_group)')
           print()
-          print('=== PATCHING bluetooth hci_sock.c (missing declarations) ===')
+          print('=== PATCHING bluetooth hci_sock.c ===')
           hci = 'net/bluetooth/hci_sock.c'
           if os.path.exists(hci):
               hlines = open(hci).readlines()
-              patched_hci = False
-              # Fix 1: bare */ comment end
-              for i, hl in enumerate(hlines):
-                  if hl.strip() == '*/' and i > 900 and i < 1200:
-                      hlines[i] = '/* (patched) */\n'
-                      print(f'PATCHED {hci} (bare comment end at line {i+1})')
-                      break
-              # Fix 2: add missing variable declarations in hci_sock_ioctl
-              in_ioctl = False
+              # Find hci_sock_ioctl function bounds
+              ioctl_start = -1
+              ioctl_brace = -1
               for i, hl in enumerate(hlines):
                   if 'hci_sock_ioctl' in hl and ('static' in hl or 'int' in hl):
-                      in_ioctl = True
-                  if in_ioctl and '{' in hl:
-                      snippet = ''.join(hlines[i:i+15])
-                      if 'struct sock *sk' not in snippet:
-                          decls = '\tstruct sock *sk = sock->sk;\n\tvoid __user *argp = (void __user *)arg;\n\tint err = 0;\n'
-                          hlines.insert(i+1, decls)
-                          print(f'PATCHED {hci} (added sk, argp, err declarations)')
-                          patched_hci = True
-                      else:
-                          print(f'SKIP {hci} (declarations already present)')
+                      ioctl_start = i
+                  if ioctl_start >= 0 and ioctl_brace < 0 and '{' in hl:
+                      ioctl_brace = i
                       break
+              if ioctl_brace >= 0:
+                  # Fix 1: add declarations right after { (always, even if inside ifdef)
+                  decls = '\tstruct sock *sk = sock->sk;\n\tvoid __user *argp = (void __user *)arg;\n\tint err = 0;\n'
+                  hlines.insert(ioctl_brace+1, decls)
+                  print(f'PATCHED {hci} (added declarations at line {ioctl_brace+2})')
+                  # Fix 2: find bare */ WITHIN the function (after our insert, search from ioctl_brace+4)
+                  for i in range(ioctl_brace+4, min(ioctl_brace+300, len(hlines))):
+                      if hlines[i].strip() == '*/':
+                          hlines[i] = '/* (patched) */\n'
+                          print(f'PATCHED {hci} (bare comment end at line {i+1})')
+                          break
+              else:
+                  print(f'SKIP {hci} (hci_sock_ioctl not found)')
               open(hci, 'w').writelines(hlines)
           else:
               print(f'SKIP {hci} (not found)')
@@ -239,11 +239,13 @@ jobs:
               echo 'obj-$(CONFIG_RTL8188FU) += rtl8188fu/' >> drivers/net/wireless/Makefile
             grep -q "rtl8188fu" drivers/net/wireless/Kconfig 2>/dev/null || \
               echo 'source "drivers/net/wireless/rtl8188fu/Kconfig"' >> drivers/net/wireless/Kconfig
-            # Fix include paths for in-tree build
-            if [ -f drivers/net/wireless/rtl8188fu/Makefile ]; then
-              sed -i '1i ccflags-y += -I$(src)/include' drivers/net/wireless/rtl8188fu/Makefile
-              echo "RTL8188FU: added include path to Makefile"
-            fi
+            # Fix include paths for in-tree O=out build via Kbuild wrapper
+            cat > drivers/net/wireless/rtl8188fu/Kbuild << 'KBEOF'
+          ccflags-y += -I$(srctree)/$(src)/include
+          ccflags-y += -I$(srctree)/$(src)/hal/phydm
+          include $(srctree)/$(src)/Makefile
+          KBEOF
+            echo "RTL8188FU: created Kbuild wrapper"
           fi
 
       - name: Apply NetHunter config
