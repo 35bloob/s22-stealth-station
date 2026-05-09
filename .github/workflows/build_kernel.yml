@@ -61,13 +61,17 @@ jobs:
           done
           echo "--- Fixing permissions ---"
           chmod -R u+w .
-          echo "--- After extraction ---"
-          ls -la
-          KDIR=$(find . -maxdepth 4 -name Makefile -exec grep -l '^VERSION' {} \; 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
-          [ -z "$KDIR" ] && { echo "ERROR no kernel Makefile"; find . -maxdepth 4 -name Makefile | head -20; exit 1; }
+          echo "--- Finding kernel directory ---"
+          KDIR=$(find . -maxdepth 5 -type d -name "arch" -exec test -d "{}/arm64/configs" \; -print 2>/dev/null | head -1 | sed 's|/arch$||')
+          if [ -z "$KDIR" ]; then
+            echo "ERROR: No arch/arm64/configs found"
+            find . -maxdepth 5 -type d | head -50
+            exit 1
+          fi
           FULL=$(cd "$KDIR" && pwd)
           echo "KERNEL_DIR=$FULL" >> $GITHUB_ENV
           echo "Kernel at: $FULL"
+          ls "$FULL/arch/arm64/configs/"
 
       - name: Apply NetHunter config
         run: |
