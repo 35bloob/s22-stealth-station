@@ -52,10 +52,7 @@ jobs:
           REAL_GCC=$(which aarch64-linux-gnu-gcc)
           echo "Real GCC at: $REAL_GCC"
           sudo cp "$REAL_GCC" "${REAL_GCC}.real"
-          sudo tee "$REAL_GCC" > /dev/null << 'WRAPPER'
-          #!/bin/bash
-          exec "${0}.real" "$@" -w -Wno-error
-          WRAPPER
+          printf '#!/bin/bash\nexec "${0}.real" "$@" -w -Wno-error\n' | sudo tee "$REAL_GCC" > /dev/null
           sudo chmod +x "$REAL_GCC"
           echo "Wrapper installed. Test:"
           aarch64-linux-gnu-gcc --version | head -1
@@ -93,10 +90,9 @@ jobs:
         run: |
           cd ${{ env.KERNEL_DIR }}
           chmod -R u+w .
-          python3 << 'PYEOF'
+          python3 -c "
           import os, re
-
-          print("=== PATCHING SOURCE FILES ===")
+          print('=== PATCHING SOURCE FILES ===')
           for root, dirs, files in os.walk('.'):
               for fname in files:
                   fpath = os.path.join(root, fname)
@@ -108,35 +104,35 @@ jobs:
                           text = text.replace('0x%lx', '%p')
                           with open(fpath, 'wb') as f:
                               f.write(text.encode('utf-8'))
-                          print(f"PATCHED {fpath}")
+                          print(f'PATCHED {fpath}')
                       else:
-                          print(f"SKIP {fpath} (no 0x%lx)")
+                          print(f'SKIP {fpath} (no 0x%lx)')
                   elif fname == 'kernel.h' and 'include/linux' in root:
                       t = open(fpath).read()
-                      if 'TRACING_MARK_TYPE_END, ""' in t:
-                          t = t.replace('TRACING_MARK_TYPE_END, ""', 'TRACING_MARK_TYPE_END, " "')
+                      if 'TRACING_MARK_TYPE_END, \"\"' in t:
+                          t = t.replace('TRACING_MARK_TYPE_END, \"\"', 'TRACING_MARK_TYPE_END, \" \"')
                           open(fpath, 'w').write(t)
-                          print(f"PATCHED {fpath} (tracing)")
+                          print(f'PATCHED {fpath} (tracing)')
                   elif fname == 'psi.c' and 'kernel/sched' in root:
                       t = open(fpath).read()
                       if '%lu' in t:
                           t = t.replace('%lu', '%llu')
                           open(fpath, 'w').write(t)
-                          print(f"PATCHED {fpath}")
-
-          print("\n=== NUKING FORBIDDEN-WARNING SYSTEM ===")
+                          print(f'PATCHED {fpath}')
+          print()
+          print('=== NUKING FORBIDDEN-WARNING SYSTEM ===')
           for root, dirs, files in os.walk('scripts'):
               for fname in files:
                   fpath = os.path.join(root, fname)
                   try:
                       t = open(fpath).read()
                       if 'forbidden' in t.lower():
-                          new = '\n'.join('# disabled' if 'forbidden' in l.lower() else l for l in t.split('\n'))
+                          new = chr(10).join('# disabled' if 'forbidden' in l.lower() else l for l in t.split(chr(10)))
                           open(fpath, 'w').write(new)
-                          print(f"NUKED: {fpath}")
+                          print(f'NUKED: {fpath}')
                   except: pass
-
-          print("\n=== STRIPPING -Werror ===")
+          print()
+          print('=== STRIPPING -Werror ===')
           for root, dirs, files in os.walk('.'):
               for fname in files:
                   if 'Makefile' in fname or fname.endswith('.mk'):
@@ -146,16 +142,15 @@ jobs:
                           if '-Werror' in t:
                               t = re.sub(r'-Werror\S*', '', t)
                               open(fpath, 'w').write(t)
-                              print(f"CLEANED: {fpath}")
+                              print(f'CLEANED: {fpath}')
                       except: pass
-
           for root, dirs, files in os.walk('scripts'):
               for fname in files:
                   if fname.endswith('.so'):
                       p = os.path.join(root, fname)
                       os.remove(p)
-                      print(f"DELETED plugin: {p}")
-          PYEOF
+                      print(f'DELETED plugin: {p}')
+          "
 
       - name: Add RTL8188FTV driver
         run: |
@@ -165,13 +160,7 @@ jobs:
             mkdir -p drivers/net/wireless/rtl8188fu
             cp -r /tmp/rtl8188fu/* drivers/net/wireless/rtl8188fu/
             if [ ! -f drivers/net/wireless/rtl8188fu/Kconfig ]; then
-              cat > drivers/net/wireless/rtl8188fu/Kconfig << 'KEOF'
-config RTL8188FU
-  tristate "Realtek RTL8188FU USB WiFi"
-  depends on USB && CFG80211
-  help
-    Enable support for Realtek RTL8188FU/FTV USB WiFi adapters.
-KEOF
+              printf 'config RTL8188FU\n  tristate "Realtek RTL8188FU USB WiFi"\n  depends on USB && CFG80211\n  help\n    Enable support for Realtek RTL8188FU/FTV USB WiFi adapters.\n' > drivers/net/wireless/rtl8188fu/Kconfig
             fi
             grep -q "rtl8188fu" drivers/net/wireless/Makefile 2>/dev/null || \
               echo 'obj-$(CONFIG_RTL8188FU) += rtl8188fu/' >> drivers/net/wireless/Makefile
@@ -205,10 +194,7 @@ KEOF
           if [ "${{ inputs.extra_features }}" = "true" ]; then
             cat ${{ github.workspace }}/configs/extra_features.config >> arch/arm64/configs/stealth_defconfig
           fi
-          cat >> arch/arm64/configs/stealth_defconfig << 'DCEOF'
-CONFIG_WERROR=n
-# CONFIG_GCC_PLUGINS is not set
-DCEOF
+          printf 'CONFIG_WERROR=n\n# CONFIG_GCC_PLUGINS is not set\n' >> arch/arm64/configs/stealth_defconfig
 
       - name: Patch KernelSU
         if: inputs.kernelsu == 'true'
@@ -216,12 +202,11 @@ DCEOF
           cd ${{ env.KERNEL_DIR }}
           chmod -R u+w .
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
-          echo -e "CONFIG_KPROBES=y\nCONFIG_HAVE_KPROBES=y\nCONFIG_KPROBE_EVENTS=y" >> arch/arm64/configs/stealth_defconfig
+          printf 'CONFIG_KPROBES=y\nCONFIG_HAVE_KPROBES=y\nCONFIG_KPROBE_EVENTS=y\n' >> arch/arm64/configs/stealth_defconfig
 
       - name: Build kernel
         run: |
           cd ${{ env.KERNEL_DIR }}
-
           echo "========================================"
           echo " PRE-BUILD VERIFICATION"
           echo "========================================"
@@ -229,46 +214,37 @@ DCEOF
           echo "--- cred.c line 161 RIGHT NOW ---"
           sed -n '158,165p' kernel/cred.c
           echo ""
-          echo "--- Does cred.c contain 0x%lx? ---"
-          grep -c "0x%lx" kernel/cred.c && echo "YES - STILL HAS BUG" || echo "NO - PATCHED OK"
+          echo "--- grep 0x%lx in cred.c ---"
+          grep -n "0x%lx" kernel/cred.c || echo "CLEAN - no 0x%lx found"
           echo ""
           echo "--- GCC wrapper check ---"
           cat $(which aarch64-linux-gnu-gcc)
           echo ""
-          echo "--- Test compile with wrapper ---"
-          echo 'int main(){return 0;}' > /tmp/test.c
-          aarch64-linux-gnu-gcc -Wformat -c /tmp/test.c -o /dev/null 2>&1 && echo "wrapper works" || echo "wrapper broken"
-          echo ""
-
-          echo "--- LAST-RESORT: patch cred.c right here ---"
+          echo "--- LAST-RESORT: patch cred.c ---"
           python3 -c "
           p='kernel/cred.c'
           t=open(p).read()
-          n=t.count(chr(48)+'x%lx')
-          print(f'0x%lx count before: {n}')
-          t=t.replace(chr(48)+'x%lx','%p')
+          n=t.count('0x' + chr(37) + 'lx')
+          print('0x%%lx count before: ' + str(n))
+          t=t.replace('0x' + chr(37) + 'lx', chr(37) + 'p')
           open(p,'w').write(t)
-          print(f'0x%lx count after: {t.count(chr(48)+\"x%lx\")}')
+          print('0x%%lx count after: ' + str(t.count('0x' + chr(37) + 'lx')))
           "
           echo ""
-          echo "--- cred.c line 161 AFTER last-resort ---"
+          echo "--- cred.c line 161 AFTER fix ---"
           sed -n '158,165p' kernel/cred.c
           echo ""
           echo "========================================"
           echo " STARTING BUILD"
           echo "========================================"
-
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
           export PLATFORM_VERSION=13
           export ANDROID_MAJOR_VERSION=t
-
           make O=out stealth_defconfig
           sed -i 's/CONFIG_WERROR=y/CONFIG_WERROR=n/' out/.config
           sed -i 's/CONFIG_GCC_PLUGINS=y/# CONFIG_GCC_PLUGINS is not set/' out/.config
-
           make O=out -j$(nproc) KCFLAGS="-w" Image 2>&1 | tail -200
-
           if [ -f out/arch/arm64/boot/Image ]; then
             echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
             echo "=== BUILD SUCCESS ==="
