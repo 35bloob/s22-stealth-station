@@ -147,7 +147,7 @@ jobs:
                       try:
                           t = open(fpath).read()
                           if '-Werror' in t:
-                              t = re.sub(r'-Werror\S*', '', t)
+                              t = re.sub(r'-Werror[=\w.-]*', '', t)
                               open(fpath, 'w').write(t)
                               print(f'CLEANED: {fpath}')
                       except: pass
