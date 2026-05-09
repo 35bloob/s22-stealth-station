@@ -133,6 +133,29 @@ jobs:
                       else:
                           print(f'SKIP {fpath} (no flush_group)')
           print()
+          print('=== PATCHING selinux services.c (missing out label) ===')
+          sef = 'security/selinux/ss/services.c'
+          if os.path.exists(sef):
+              slines = open(sef).readlines()
+              in_func = False
+              goto_found = False
+              patched = False
+              for i, sl in enumerate(slines):
+                  if 'security_get_user_sids' in sl and '(' in sl:
+                      in_func = True
+                  if in_func and 'goto out;' in sl:
+                      goto_found = True
+                  if in_func and goto_found and sl.rstrip() == '}':
+                      slines.insert(i, 'out:\n')
+                      open(sef, 'w').writelines(slines)
+                      print(f'PATCHED {sef} (added out: label at line {i})')
+                      patched = True
+                      break
+              if not patched:
+                  print(f'SKIP {sef} (no patch needed)')
+          else:
+              print(f'SKIP {sef} (not found)')
+          print()
           print('=== REPLACING cc-wrapper.c WITH PASS-THROUGH ===')
           for root, dirs, files in os.walk('scripts'):
               for fname in files:
