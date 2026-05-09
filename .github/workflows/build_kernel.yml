@@ -57,9 +57,7 @@ jobs:
           exec "${0}.real" "$@" -w -Wno-error
           WRAPPER
           sudo chmod +x "$REAL_GCC"
-          echo "Wrapper installed. Test:"
-          aarch64-linux-gnu-gcc --version | head -1
-          echo "Wrapper contents:"
+          echo "Wrapper installed."
           cat "$REAL_GCC"
 
       - name: Download kernel source
@@ -109,8 +107,6 @@ jobs:
                           with open(fpath, 'wb') as f:
                               f.write(text.encode('utf-8'))
                           print(f"PATCHED {fpath}")
-                      else:
-                          print(f"SKIP {fpath} (no 0x%lx)")
                   elif fname == 'kernel.h' and 'include/linux' in root:
                       t = open(fpath).read()
                       if 'TRACING_MARK_TYPE_END, ""' in t:
@@ -136,7 +132,7 @@ jobs:
                           print(f"NUKED: {fpath}")
                   except: pass
 
-          print("\n=== STRIPPING -Werror ===")
+          print("\n=== STRIPPING -Werror FROM ALL MAKEFILES ===")
           for root, dirs, files in os.walk('.'):
               for fname in files:
                   if 'Makefile' in fname or fname.endswith('.mk'):
@@ -195,6 +191,7 @@ KEOF
               DC=$(find arch/arm64/configs -maxdepth 1 -type f -name '*defconfig' | head -1)
             fi
           fi
+          echo "Base defconfig: $DC"
           cp "$DC" arch/arm64/configs/stealth_defconfig
           if [ -d arch/arm64/configs/vendor ]; then
             find arch/arm64/configs/vendor -type f | while read frag; do
@@ -222,41 +219,16 @@ DCEOF
         run: |
           cd ${{ env.KERNEL_DIR }}
 
-          echo "========================================"
-          echo " PRE-BUILD VERIFICATION"
-          echo "========================================"
-          echo ""
-          echo "--- cred.c line 161 RIGHT NOW ---"
-          sed -n '158,165p' kernel/cred.c
-          echo ""
-          echo "--- Does cred.c contain 0x%lx? ---"
-          grep -c "0x%lx" kernel/cred.c && echo "YES - STILL HAS BUG" || echo "NO - PATCHED OK"
-          echo ""
-          echo "--- GCC wrapper check ---"
-          cat $(which aarch64-linux-gnu-gcc)
-          echo ""
-          echo "--- Test compile with wrapper ---"
-          echo 'int main(){return 0;}' > /tmp/test.c
-          aarch64-linux-gnu-gcc -Wformat -c /tmp/test.c -o /dev/null 2>&1 && echo "wrapper works" || echo "wrapper broken"
-          echo ""
-
-          echo "--- LAST-RESORT: patch cred.c right here ---"
+          # Last-resort source patch right before build
           python3 -c "
           p='kernel/cred.c'
           t=open(p).read()
-          n=t.count(chr(48)+'x%lx')
-          print(f'0x%lx count before: {n}')
-          t=t.replace(chr(48)+'x%lx','%p')
+          n=t.count('0x%lx')
+          print(f'cred.c 0x%lx count before: {n}')
+          t=t.replace('0x%lx','%p')
           open(p,'w').write(t)
-          print(f'0x%lx count after: {t.count(chr(48)+\"x%lx\")}')
+          print(f'cred.c 0x%lx count after: {t.count(chr(48)+chr(120)+chr(37)+chr(108)+chr(120))}')
           "
-          echo ""
-          echo "--- cred.c line 161 AFTER last-resort ---"
-          sed -n '158,165p' kernel/cred.c
-          echo ""
-          echo "========================================"
-          echo " STARTING BUILD"
-          echo "========================================"
 
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
@@ -267,13 +239,34 @@ DCEOF
           sed -i 's/CONFIG_WERROR=y/CONFIG_WERROR=n/' out/.config
           sed -i 's/CONFIG_GCC_PLUGINS=y/# CONFIG_GCC_PLUGINS is not set/' out/.config
 
-          make O=out -j$(nproc) KCFLAGS="-w" Image 2>&1 | tail -200
+          echo "=== STARTING BUILD ==="
+          set +e
+          make O=out -j$(nproc) KCFLAGS="-w" Image 2>&1 | tee /tmp/build.log
+          BUILD_EXIT=${PIPESTATUS[0]}
+          set -e
+
+          echo ""
+          echo "=== BUILD EXIT CODE: $BUILD_EXIT ==="
+          echo ""
+
+          if [ $BUILD_EXIT -ne 0 ]; then
+            echo "========================================"
+            echo " ALL ERRORS FROM BUILD LOG"
+            echo "========================================"
+            grep -E "error:|Error [0-9]|undefined|fatal:" /tmp/build.log | grep -v "^#" | tail -60
+            echo "========================================"
+            echo " LAST 100 LINES OF BUILD LOG"
+            echo "========================================"
+            tail -100 /tmp/build.log
+            exit 1
+          fi
 
           if [ -f out/arch/arm64/boot/Image ]; then
             echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
             echo "=== BUILD SUCCESS ==="
           else
-            echo "=== BUILD FAILED ==="
+            echo "=== NO IMAGE PRODUCED ==="
+            tail -100 /tmp/build.log
             exit 1
           fi
 
@@ -292,8 +285,10 @@ DCEOF
           mkdir -p ${{ github.workspace }}/output
           cp "$ZIP_NAME" ${{ github.workspace }}/output/
           cp ${{ env.KERNEL_DIR }}/out/arch/arm64/boot/Image ${{ github.workspace }}/output/
+          cp ${{ env.KERNEL_DIR }}/out/.config ${{ github.workspace }}/output/kernel_config.txt 2>/dev/null || true
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
           echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
+          ls -lh ${{ github.workspace }}/output/
 
       - name: Upload artifact
         if: env.BUILD_SUCCESS == 'true'
