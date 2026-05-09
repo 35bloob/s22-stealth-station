@@ -42,71 +42,75 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "=== Downloading from kernel-source release ==="
+          echo "--- Downloading release ---"
           gh release download kernel-source --dir .
-          echo "=== Downloaded files ==="
           ls -lh
-          ARCHIVE=$(ls *.zip 2>/dev/null || ls *.tar.gz 2>/dev/null)
-          ARCHIVE=$(echo "$ARCHIVE" | head -1)
-          echo "Using archive: $ARCHIVE"
+          ARCHIVE=$(ls *.zip 2>/dev/null | head -1)
+          [ -z "$ARCHIVE" ] && ARCHIVE=$(ls *.tar.gz 2>/dev/null | head -1)
+          echo "Archive: $ARCHIVE"
           mkdir -p kernel_src && cd kernel_src
-          if echo "$ARCHIVE" | grep -qi "\.zip$"; then
+          if echo "$ARCHIVE" | grep -qi '\.zip$'; then
             unzip "../$ARCHIVE"
           else
             tar xf "../$ARCHIVE"
           fi
-          echo "=== Top-level contents ==="
+          echo "--- Top-level ---"
           ls -la
-          if [ -f Kernel.tar.gz ]; then
-            echo "Found Kernel.tar.gz, extracting..."
-            tar xzf Kernel.tar.gz
-          fi
-          if [ -f kernel.tar.gz ]; then
-            echo "Found kernel.tar.gz, extracting..."
-            tar xzf kernel.tar.gz
-          fi
           for f in *.tar.gz; do
-            if [ -f "$f" ]; then
-              echo "Extracting $f..."
-              tar xzf "$f" || true
-            fi
+            [ -f "$f" ] && echo "Extracting $f" && tar xzf "$f" || true
           done
-          echo "=== After extraction ==="
+          echo "--- Fixing permissions ---"
+          chmod -R u+w .
+          echo "--- After extraction ---"
           ls -la
-          KDIR=$(find . -maxdepth 3 -name "Makefile" -exec grep -l "^VERSION" {} \; 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
-          if [ -z "$KDIR" ]; then
-            KDIR=$(find . -maxdepth 4 -name "Makefile" | head -1 | xargs dirname 2>/dev/null)
-          fi
-          if [ -z "$KDIR" ]; then
-            echo "ERROR: Could not find kernel Makefile"
-            find . -maxdepth 3 -type f -name "Makefile" | head -20
-            exit 1
-          fi
-          FULL_KDIR=$(cd "$KDIR" && pwd)
-          echo "KERNEL_DIR=$FULL_KDIR" >> $GITHUB_ENV
-          echo "Found kernel at: $FULL_KDIR"
+          KDIR=$(find . -maxdepth 4 -name Makefile -exec grep -l '^VERSION' {} \; 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+          [ -z "$KDIR" ] && { echo "ERROR no kernel Makefile"; find . -maxdepth 4 -name Makefile | head -20; exit 1; }
+          FULL=$(cd "$KDIR" && pwd)
+          echo "KERNEL_DIR=$FULL" >> $GITHUB_ENV
+          echo "Kernel at: $FULL"
 
       - name: Apply NetHunter config
         run: |
           cd ${{ env.KERNEL_DIR }}
-          echo "=== Available defconfigs ==="
-          ls arch/arm64/configs/ | head -20
-          DEFCONFIG=$(find arch/arm64/configs -name "*s5e9925*" -o -name "*s901e*" -o -name "*exynos2200*" 2>/dev/null | head -1)
-          [ -z "$DEFCONFIG" ] && DEFCONFIG=$(find arch/arm64/configs -name "*s901*" 2>/dev/null | head -1)
-          [ -z "$DEFCONFIG" ] && DEFCONFIG=$(find arch/arm64/configs -name "*exynos*" 2>/dev/null | head -1)
-          [ -z "$DEFCONFIG" ] && DEFCONFIG=$(find arch/arm64/configs -name "*_defconfig" | head -1)
-          DEFCONFIG_NAME=$(basename "$DEFCONFIG")
-          echo "Using defconfig: $DEFCONFIG_NAME"
-          cp arch/arm64/configs/$DEFCONFIG_NAME arch/arm64/configs/stealth_defconfig
+          chmod -R u+w .
+          echo "--- All defconfigs ---"
+          find arch/arm64/configs -type f | sort
+          echo "--- Vendor contents ---"
+          find arch/arm64/configs/vendor -type f 2>/dev/null | sort || echo "No vendor dir"
+          DC=""
+          for p in "*s5e9925*" "*dm1s*" "*dm1*" "*s901*" "*exynos*" "*samsung*"; do
+            DC=$(find arch/arm64/configs -type f -name "$p" 2>/dev/null | head -1)
+            [ -n "$DC" ] && break
+          done
+          if [ -z "$DC" ]; then
+            if [ -f arch/arm64/configs/gki_defconfig ]; then
+              DC=arch/arm64/configs/gki_defconfig
+              echo "Fallback: gki_defconfig"
+            else
+              DC=$(find arch/arm64/configs -maxdepth 1 -type f -name '*defconfig' | head -1)
+              echo "Fallback: $DC"
+            fi
+          fi
+          echo "Base defconfig: $DC"
+          cp "$DC" arch/arm64/configs/stealth_defconfig
+          if [ -d arch/arm64/configs/vendor ]; then
+            echo "--- Appending ALL vendor fragments ---"
+            find arch/arm64/configs/vendor -type f | while read frag; do
+              echo "  + $frag"
+              cat "$frag" >> arch/arm64/configs/stealth_defconfig
+            done
+          fi
           cat ${{ github.workspace }}/configs/nethunter_fragment.config >> arch/arm64/configs/stealth_defconfig
           if [ "${{ inputs.extra_features }}" = "true" ]; then
             cat ${{ github.workspace }}/configs/extra_features.config >> arch/arm64/configs/stealth_defconfig
           fi
+          echo "Total lines: $(wc -l < arch/arm64/configs/stealth_defconfig)"
 
       - name: Patch KernelSU
         if: inputs.kernelsu == 'true'
         run: |
           cd ${{ env.KERNEL_DIR }}
+          chmod -R u+w .
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
           echo -e "CONFIG_KPROBES=y\nCONFIG_HAVE_KPROBES=y\nCONFIG_KPROBE_EVENTS=y" >> arch/arm64/configs/stealth_defconfig
 
@@ -122,7 +126,6 @@ jobs:
           if [ -f out/arch/arm64/boot/Image ]; then
             echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
           else
-            echo "BUILD FAILED"
             exit 1
           fi
 
@@ -131,7 +134,7 @@ jobs:
         run: |
           cd ${{ env.KERNEL_DIR }}
           mkdir -p ${{ github.workspace }}/output
-          cp out/arch/arm64/boot/Image ${{ github.workspace }}/output/boot_image_raw.img 2>/dev/null || true
+          cp out/arch/arm64/boot/Image ${{ github.workspace }}/output/Image 2>/dev/null || true
           cp out/arch/arm64/boot/Image.gz ${{ github.workspace }}/output/Image.gz 2>/dev/null || true
           cp out/.config ${{ github.workspace }}/output/kernel_config.txt 2>/dev/null || true
           ls -lh ${{ github.workspace }}/output/
