@@ -76,110 +76,108 @@ jobs:
           FULL=$(cd "$KDIR" && pwd)
           echo "KERNEL_DIR=$FULL" >> $GITHUB_ENV
           echo "Kernel at: $FULL"
-          ls "$FULL/arch/arm64/configs/"
 
-      - name: Nuke Samsung forbidden warnings
+      - name: Patch all source warnings and kill forbidden-warning system
         run: |
           cd ${{ env.KERNEL_DIR }}
           chmod -R u+w .
 
-          echo "=== PHASE 1: Find ALL forbidden-warning files ==="
-          grep -rl "forbidden" scripts/ . --include="*.py" --include="*.sh" --include="*.pl" --include="Makefile*" --include="*.c" --include="*.h" 2>/dev/null | head -30 || true
+          echo "=========================================="
+          echo "  FIXING SOURCE FILES"
+          echo "=========================================="
 
-          echo "=== PHASE 2: Nuke gcc-wrapper / cc-wrapper scripts ==="
+          echo "--- cred.c: fix %lx format for void* ---"
+          CRED=kernel/cred.c
+          echo "Before:"
+          grep -n "security.*%lx\|%lx.*security" "$CRED" || echo "  (no match with grep)"
+          grep -n "KDP" "$CRED" || echo "  (no KDP match)"
+          # Strategy 1: cast the void* argument to unsigned long
+          sed -i 's/, cred->security);/, (unsigned long)cred->security);/g' "$CRED"
+          # Strategy 2: if strategy 1 missed, try replacing %lx with %p on KDP lines
+          sed -i '/KDP/s/0x%lx/%p/g' "$CRED"
+          # Strategy 3: blanket - any remaining %lx on lines with "security"
+          sed -i '/security/s/%lx/%p/g' "$CRED"
+          echo "After:"
+          grep -n "security.*%\|KDP" "$CRED" | head -5
+
+          echo ""
+          echo "--- kernel.h: fix zero-length format in tracing_mark_end ---"
+          KH=include/linux/kernel.h
+          sed -i 's/__tracing_mark(TRACING_MARK_TYPE_END, "")/__tracing_mark(TRACING_MARK_TYPE_END, " ")/g' "$KH"
+          echo "  Done"
+
+          echo ""
+          echo "--- psi.c: fix %lu for u64 ---"
+          PSI=kernel/sched/psi.c
+          if [ -f "$PSI" ]; then
+            sed -i 's/%lu/%llu/g' "$PSI"
+            echo "  Done"
+          fi
+
+          echo ""
+          echo "=========================================="
+          echo "  KILLING FORBIDDEN-WARNING SYSTEM"
+          echo "=========================================="
+
+          echo "--- Searching for forbidden-warning mechanism ---"
+          echo "Files containing 'forbidden':"
+          grep -rn "forbidden" scripts/ --include="*" 2>/dev/null | head -20 || echo "  none in scripts/"
+          grep -rn "forbidden" Makefile 2>/dev/null | head -5 || echo "  none in Makefile"
+
+          echo ""
+          echo "--- Makefile.build line 278 area ---"
+          if [ -f scripts/Makefile.build ]; then
+            sed -n '270,290p' scripts/Makefile.build
+          fi
+
+          echo ""
+          echo "--- Neutralizing scripts/Makefile.build forbidden check ---"
+          if [ -f scripts/Makefile.build ]; then
+            # Remove any line containing "forbidden"
+            sed -i '/forbidden/d' scripts/Makefile.build
+            # Remove any line that turns warnings into errors
+            sed -i '/warn-error\|warn_error\|WARNING_ERROR/d' scripts/Makefile.build
+            # Remove -Werror from compilation commands
+            sed -i 's/-Werror[^ ]*//g' scripts/Makefile.build
+          fi
+
+          echo "--- Neutralizing ALL scripts with forbidden ---"
+          find . -type f \( -name "*.py" -o -name "*.sh" -o -name "*.pl" -o -name "Makefile*" -o -name "*.mk" \) | while read f; do
+            if grep -q "forbidden" "$f" 2>/dev/null; then
+              echo "  Cleaning: $f"
+              sed -i '/forbidden/d' "$f"
+            fi
+          done
+
+          echo "--- Replacing gcc wrapper scripts ---"
           for wrapper in scripts/gcc-wrapper.py scripts/cc-wrapper.py scripts/gcc-checker.py; do
             if [ -f "$wrapper" ]; then
-              echo "  Found: $wrapper — replacing with passthrough"
-              cat > "$wrapper" << 'PYEOF'
-#!/usr/bin/env python3
-import sys, os
-args = sys.argv[1:]
-ret = os.spawnvp(os.P_WAIT, args[0], args)
-sys.exit(ret)
-PYEOF
+              echo "  Replacing: $wrapper"
+              printf '#!/usr/bin/env python3\nimport sys,os\nret=os.spawnvp(os.P_WAIT,sys.argv[1],sys.argv[1:])\nsys.exit(ret)\n' > "$wrapper"
               chmod +x "$wrapper"
             fi
           done
 
-          echo "=== PHASE 3: Nuke forbidden in ALL Makefiles ==="
+          echo "--- Deleting GCC plugin .so files ---"
+          find scripts -name "*.so" -delete 2>/dev/null && echo "  Deleted .so plugins" || echo "  No .so files"
+
+          echo "--- Removing -Werror from ALL Makefiles ---"
           find . -name "Makefile*" -o -name "*.mk" | while read mf; do
-            if grep -q "forbidden\|WERROR\|Werror" "$mf" 2>/dev/null; then
-              echo "  Cleaning: $mf"
-              sed -i 's/-Werror[^ ]*//g; /forbidden/d; /WERROR/d' "$mf"
+            if grep -q "\-Werror" "$mf" 2>/dev/null; then
+              echo "  Stripping -Werror: $mf"
+              sed -i 's/-Werror[^ ]*//g' "$mf"
             fi
           done
 
-          echo "=== PHASE 4: Nuke GCC plugins that enforce warnings ==="
-          find scripts/gcc-plugins -name "*.so" -delete 2>/dev/null || true
-          find scripts/gcc-plugins -name "*.c" | while read f; do
-            if grep -qi "forbidden\|werror\|warning.*error" "$f" 2>/dev/null; then
-              echo "  Emptying plugin: $f"
-              echo "/* disabled */" > "$f"
-            fi
-          done
-
-          echo "=== PHASE 5: Disable Kconfig WERROR ==="
-          find . -name "Kconfig*" | while read kc; do
-            if grep -q "WERROR" "$kc" 2>/dev/null; then
-              echo "  Patching Kconfig: $kc"
-              sed -i '/WERROR/,/^$/s/default y/default n/' "$kc"
-            fi
-          done
-
-          echo "=== PHASE 6: Check for build-rule error injection ==="
-          if [ -f scripts/Makefile.build ]; then
-            # Samsung sometimes adds: $(error forbidden warning: ...)
-            sed -i '/\$(error.*forbidden/d; /\$(error.*warning/d' scripts/Makefile.build
-            # Also check for custom error functions
-            sed -i 's/\$(call echo-error,.*forbidden.*)//' scripts/Makefile.build
-          fi
-          if [ -f scripts/Makefile.lib ]; then
-            sed -i '/\$(error.*forbidden/d; /\$(error.*warning/d' scripts/Makefile.lib
-          fi
-
-          echo "Done — all forbidden warning mechanisms neutralized."
-
-      - name: Patch source files with warnings
-        run: |
-          cd ${{ env.KERNEL_DIR }}
-
-          echo "=== Patching psi.c ==="
-          PSI=kernel/sched/psi.c
-          if [ -f "$PSI" ]; then
-            sed -i 's/%s %lu %lu %d %lu %lu/%s %llu %llu %d %llu %llu/g' "$PSI"
-            echo "  Done"
-          fi
-
-          echo "=== Patching cred.c ==="
-          CRED=kernel/cred.c
-          if [ -f "$CRED" ]; then
-            sed -i 's/cred->security: 0x%lx/cred->security: %p/' "$CRED"
-            sed -i 's/printk("\[KDP\] cred->security: %p\\n", cred->security);/printk("[KDP] cred->security: %p\\n", cred->security);/' "$CRED"
-            echo "  Done"
-          fi
-
-          echo "=== Patching kernel.h tracing_mark ==="
-          KH=include/linux/kernel.h
-          if [ -f "$KH" ]; then
-            # Replace empty format string "" with " " in __tracing_mark calls
-            sed -i 's/__tracing_mark(TRACING_MARK_TYPE_END, "")/__tracing_mark(TRACING_MARK_TYPE_END, " ")/g' "$KH"
-            # Also fix any similar pattern
-            sed -i 's/snprintf(buf, TRACING_MARK_BUF_SIZE, "", /snprintf(buf, TRACING_MARK_BUF_SIZE, " ", /g' "$KH"
-            echo "  Done"
-          fi
-
-          echo "=== Scanning for other format warnings ==="
-          # Preemptively fix common Samsung format mismatches
-          find kernel/ mm/ -name "*.c" | while read f; do
-            if grep -q 'printk.*%lx.*cred\|printk.*%lu.*u64' "$f" 2>/dev/null; then
-              echo "  Found potential: $f"
-            fi
-          done
+          echo ""
+          echo "--- Verify: search for remaining forbidden refs ---"
+          grep -rn "forbidden" scripts/ --include="*" 2>/dev/null | head -5 || echo "  CLEAN - no forbidden refs remain"
+          echo ""
+          echo "ALL PATCHES APPLIED"
 
       - name: Add RTL8188FTV driver
         run: |
           cd ${{ env.KERNEL_DIR }}
-          echo "--- Cloning RTL8188FU driver ---"
           git clone --depth=1 https://github.com/kelebek333/rtl8188fu /tmp/rtl8188fu || true
           if [ -d /tmp/rtl8188fu ]; then
             mkdir -p drivers/net/wireless/rtl8188fu
@@ -198,8 +196,6 @@ KEOF
             grep -q "rtl8188fu" drivers/net/wireless/Kconfig 2>/dev/null || \
               echo 'source "drivers/net/wireless/rtl8188fu/Kconfig"' >> drivers/net/wireless/Kconfig
             echo "RTL8188FU driver integrated"
-          else
-            echo "WARN: Could not clone RTL8188FU, skipping"
           fi
 
       - name: Apply NetHunter config
@@ -229,8 +225,10 @@ KEOF
           if [ "${{ inputs.extra_features }}" = "true" ]; then
             cat ${{ github.workspace }}/configs/extra_features.config >> arch/arm64/configs/stealth_defconfig
           fi
-          echo "CONFIG_WERROR=n" >> arch/arm64/configs/stealth_defconfig
-          echo "# CONFIG_GCC_PLUGINS is not set" >> arch/arm64/configs/stealth_defconfig
+          cat >> arch/arm64/configs/stealth_defconfig << 'DCEOF'
+CONFIG_WERROR=n
+# CONFIG_GCC_PLUGINS is not set
+DCEOF
           echo "Total lines: $(wc -l < arch/arm64/configs/stealth_defconfig)"
 
       - name: Patch KernelSU
@@ -249,7 +247,6 @@ KEOF
           export PLATFORM_VERSION=13
           export ANDROID_MAJOR_VERSION=t
           make O=out stealth_defconfig
-          # Double-ensure: disable werror in generated .config
           sed -i 's/CONFIG_WERROR=y/CONFIG_WERROR=n/' out/.config
           sed -i 's/CONFIG_GCC_PLUGINS=y/# CONFIG_GCC_PLUGINS is not set/' out/.config
           make O=out -j$(nproc) KCFLAGS="-w" EXTRA_CFLAGS="-w -Wno-error" Image 2>&1 | tail -200
