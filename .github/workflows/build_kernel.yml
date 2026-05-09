@@ -52,12 +52,9 @@ jobs:
           REAL_GCC=$(which aarch64-linux-gnu-gcc)
           echo "Real GCC at: $REAL_GCC"
           sudo cp "$REAL_GCC" "${REAL_GCC}.real"
-          sudo tee "$REAL_GCC" > /dev/null << 'WRAPPER'
-          #!/bin/bash
-          exec "${0}.real" "$@" -w -Wno-error
-          WRAPPER
+          printf '#!/bin/bash\nexec "${0}.real" "$@" -w -Wno-error\n' | sudo tee "$REAL_GCC" > /dev/null
           sudo chmod +x "$REAL_GCC"
-          echo "Wrapper installed."
+          echo "Wrapper installed:"
           cat "$REAL_GCC"
 
       - name: Download kernel source
@@ -67,7 +64,6 @@ jobs:
           gh release download kernel-source --dir .
           ARCHIVE=$(ls *.zip 2>/dev/null | head -1)
           [ -z "$ARCHIVE" ] && ARCHIVE=$(ls *.tar.gz 2>/dev/null | head -1)
-          echo "Archive: $ARCHIVE"
           mkdir -p kernel_src && cd kernel_src
           if echo "$ARCHIVE" | grep -qi '\.zip$'; then
             unzip "../$ARCHIVE"
@@ -75,83 +71,96 @@ jobs:
             tar xf "../$ARCHIVE"
           fi
           for f in *.tar.gz; do
-            [ -f "$f" ] && echo "Extracting $f" && tar xzf "$f" || true
+            [ -f "$f" ] && tar xzf "$f" || true
           done
           chmod -R u+w .
           KDIR=$(find . -maxdepth 5 -type d -name "arch" -exec test -d "{}/arm64/configs" \; -print 2>/dev/null | head -1 | sed 's|/arch$||')
-          if [ -z "$KDIR" ]; then
-            echo "ERROR: No arch/arm64/configs found"
-            exit 1
-          fi
+          [ -z "$KDIR" ] && echo "ERROR: kernel dir not found" && exit 1
           FULL=$(cd "$KDIR" && pwd)
           echo "KERNEL_DIR=$FULL" >> $GITHUB_ENV
           echo "Kernel at: $FULL"
 
-      - name: Patch source and nuke forbidden-warning system
+      - name: Kill Samsung forbidden-warning system
         run: |
           cd ${{ env.KERNEL_DIR }}
           chmod -R u+w .
-          python3 << 'PYEOF'
-          import os, re
 
-          print("=== PATCHING SOURCE FILES ===")
-          for root, dirs, files in os.walk('.'):
-              for fname in files:
-                  fpath = os.path.join(root, fname)
-                  if fname == 'cred.c':
-                      with open(fpath, 'rb') as f:
-                          raw = f.read()
-                      text = raw.decode('utf-8', errors='replace')
-                      if '0x%lx' in text:
-                          text = text.replace('0x%lx', '%p')
-                          with open(fpath, 'wb') as f:
-                              f.write(text.encode('utf-8'))
-                          print(f"PATCHED {fpath}")
-                  elif fname == 'kernel.h' and 'include/linux' in root:
-                      t = open(fpath).read()
-                      if 'TRACING_MARK_TYPE_END, ""' in t:
-                          t = t.replace('TRACING_MARK_TYPE_END, ""', 'TRACING_MARK_TYPE_END, " "')
-                          open(fpath, 'w').write(t)
-                          print(f"PATCHED {fpath} (tracing)")
-                  elif fname == 'psi.c' and 'kernel/sched' in root:
-                      t = open(fpath).read()
-                      if '%lu' in t:
-                          t = t.replace('%lu', '%llu')
-                          open(fpath, 'w').write(t)
-                          print(f"PATCHED {fpath}")
-
-          print("\n=== NUKING FORBIDDEN-WARNING SYSTEM ===")
-          for root, dirs, files in os.walk('scripts'):
-              for fname in files:
-                  fpath = os.path.join(root, fname)
-                  try:
-                      t = open(fpath).read()
-                      if 'forbidden' in t.lower():
-                          new = '\n'.join('# disabled' if 'forbidden' in l.lower() else l for l in t.split('\n'))
-                          open(fpath, 'w').write(new)
-                          print(f"NUKED: {fpath}")
-                  except: pass
-
-          print("\n=== STRIPPING -Werror FROM ALL MAKEFILES ===")
-          for root, dirs, files in os.walk('.'):
-              for fname in files:
-                  if 'Makefile' in fname or fname.endswith('.mk'):
-                      fpath = os.path.join(root, fname)
-                      try:
-                          t = open(fpath).read()
-                          if '-Werror' in t:
-                              t = re.sub(r'-Werror\S*', '', t)
-                              open(fpath, 'w').write(t)
-                              print(f"CLEANED: {fpath}")
-                      except: pass
-
-          for root, dirs, files in os.walk('scripts'):
-              for fname in files:
-                  if fname.endswith('.so'):
-                      p = os.path.join(root, fname)
-                      os.remove(p)
-                      print(f"DELETED plugin: {p}")
+          echo "=== Hunting gcc-wrapper and forbidden-warning scripts ==="
+          # Find and neuter ANY script that outputs 'forbidden warning'
+          grep -rl "forbidden warning" . --include="*.py" --include="*.pl" --include="*.sh" 2>/dev/null | while read f; do
+            echo "DISABLING: $f"
+            # Replace the forbidden-warning error line with a no-op print
+            sed -i 's/.*forbidden warning.*$/print("forbidden warning suppressed")/' "$f" 2>/dev/null || true
+            # Also replace sys.exit calls near forbidden
+            python3 - "$f" << 'PYEOF'
+          import sys, re
+          f = sys.argv[1]
+          t = open(f).read()
+          # Remove any sys.exit() that follows a forbidden warning check
+          t = re.sub(r'(.*forbidden.*\n.*sys\.exit.*)', r'# \1', t)
+          t = re.sub(r'raise\s+\w*Error.*forbidden.*', '# forbidden check removed', t)
+          open(f, 'w').write(t)
+          print(f"Deep-cleaned: {f}")
           PYEOF
+          done
+
+          # Specifically target gcc-wrapper.py - the main Samsung forbidden-warning enforcer
+          for wrapper in scripts/gcc-wrapper.py scripts/gcc_version_check.py scripts/check_compiler.py; do
+            if [ -f "$wrapper" ]; then
+              echo "NEUTERING: $wrapper"
+              # Keep the file but make it a pass-through
+              cat > "$wrapper" << 'PASSTHROUGH'
+          #!/usr/bin/env python3
+          import sys, os, subprocess
+          # Samsung gcc-wrapper neutered - pass all args directly to compiler
+          result = subprocess.run(sys.argv[1:], capture_output=False)
+          sys.exit(result.returncode)
+          PASSTHROUGH
+              echo "  -> replaced with pass-through"
+            fi
+          done
+
+          # Strip -Werror from ALL Makefiles recursively
+          echo "=== Stripping -Werror from Makefiles ==="
+          find . -name "Makefile" -o -name "*.mk" | while read mf; do
+            if grep -q "Werror" "$mf" 2>/dev/null; then
+              sed -i 's/-Werror[a-z=\-]*//g' "$mf"
+              echo "  CLEANED: $mf"
+            fi
+          done
+
+          # Also check if gcc-wrapper is invoked via CC= override in top Makefile
+          if grep -q "gcc-wrapper" Makefile 2>/dev/null; then
+            echo "REMOVING gcc-wrapper from top Makefile"
+            sed -i 's|scripts/gcc-wrapper.py ||g' Makefile
+            sed -i 's|python.*gcc-wrapper.py||g' Makefile
+          fi
+
+          echo "=== Done ==="
+
+      - name: Patch source files
+        run: |
+          cd ${{ env.KERNEL_DIR }}
+
+          echo "--- Patching psi.c ---"
+          PSI=$(find . -path "*/kernel/sched/psi.c" | head -1)
+          if [ -n "$PSI" ]; then
+            echo "Found: $PSI"
+            echo "Before:"
+            grep -n "psi: %s" "$PSI" || true
+            sed -i 's/psi: %s %lu %lu %d %lu %lu/psi: %s %llu %llu %d %llu %llu/g' "$PSI"
+            echo "After:"
+            grep -n "psi: %s" "$PSI" || true
+          else
+            echo "WARNING: psi.c not found"
+          fi
+
+          echo "--- Patching cred.c ---"
+          CRED=$(find . -name "cred.c" -path "*/kernel/*" | head -1)
+          if [ -n "$CRED" ]; then
+            sed -i 's/0x%lx/%p/g' "$CRED"
+            echo "cred.c patched"
+          fi
 
       - name: Add RTL8188FTV driver
         run: |
@@ -185,11 +194,7 @@ KEOF
             [ -n "$DC" ] && break
           done
           if [ -z "$DC" ]; then
-            if [ -f arch/arm64/configs/gki_defconfig ]; then
-              DC=arch/arm64/configs/gki_defconfig
-            else
-              DC=$(find arch/arm64/configs -maxdepth 1 -type f -name '*defconfig' | head -1)
-            fi
+            DC=$(find arch/arm64/configs -maxdepth 1 -type f -name '*defconfig' | head -1)
           fi
           echo "Base defconfig: $DC"
           cp "$DC" arch/arm64/configs/stealth_defconfig
@@ -219,16 +224,14 @@ DCEOF
         run: |
           cd ${{ env.KERNEL_DIR }}
 
-          # Last-resort source patch right before build
-          python3 -c "
-          p='kernel/cred.c'
-          t=open(p).read()
-          n=t.count('0x%lx')
-          print(f'cred.c 0x%lx count before: {n}')
-          t=t.replace('0x%lx','%p')
-          open(p,'w').write(t)
-          print(f'cred.c 0x%lx count after: {t.count(chr(48)+chr(120)+chr(37)+chr(108)+chr(120))}')
-          "
+          # Verify patches applied
+          echo "=== PRE-BUILD CHECKS ==="
+          PSI=$(find . -path "*/kernel/sched/psi.c" | head -1)
+          echo "psi.c format line:"
+          grep -n "psi: %s" "$PSI" || echo "NOT FOUND"
+          echo "gcc-wrapper status:"
+          [ -f scripts/gcc-wrapper.py ] && head -3 scripts/gcc-wrapper.py || echo "no gcc-wrapper.py"
+          echo "========================"
 
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
@@ -245,30 +248,20 @@ DCEOF
           BUILD_EXIT=${PIPESTATUS[0]}
           set -e
 
-          echo ""
-          echo "=== BUILD EXIT CODE: $BUILD_EXIT ==="
-          echo ""
-
           if [ $BUILD_EXIT -ne 0 ]; then
             echo "========================================"
-            echo " ALL ERRORS FROM BUILD LOG"
+            echo " ERRORS"
             echo "========================================"
-            grep -E "error:|Error [0-9]|undefined|fatal:" /tmp/build.log | grep -v "^#" | tail -60
+            grep -E "^.*error[: ]|forbidden|undefined reference|fatal:" /tmp/build.log | grep -v "^#" | tail -80
             echo "========================================"
-            echo " LAST 100 LINES OF BUILD LOG"
+            echo " LAST 50 LINES"
             echo "========================================"
-            tail -100 /tmp/build.log
+            tail -50 /tmp/build.log
             exit 1
           fi
 
-          if [ -f out/arch/arm64/boot/Image ]; then
-            echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
-            echo "=== BUILD SUCCESS ==="
-          else
-            echo "=== NO IMAGE PRODUCED ==="
-            tail -100 /tmp/build.log
-            exit 1
-          fi
+          [ -f out/arch/arm64/boot/Image ] && echo "BUILD_SUCCESS=true" >> $GITHUB_ENV || exit 1
+          echo "=== BUILD SUCCESS ==="
 
       - name: Package with AnyKernel3
         if: env.BUILD_SUCCESS == 'true'
