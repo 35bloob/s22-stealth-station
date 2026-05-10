@@ -222,6 +222,38 @@ jobs:
                               print(f'CLEANED: {fpath}')
                       except: pass
           print()
+          print('=== FIX SAMSUNG u SUFFIX IN ASM CONSTANTS ===')
+          # Samsung adds u/U suffix to hex constants in arch headers;
+          # these leak into inline asm (brk, BUG_ON, WARN) causing
+          # 'junk at end of line' assembler errors
+          for adir in ['arch/arm64/include/asm', 'include/asm-generic']:
+              if not os.path.isdir(adir):
+                  continue
+              for fname in os.listdir(adir):
+                  if fname.endswith('.h'):
+                      fpath = os.path.join(adir, fname)
+                      try:
+                          t = open(fpath).read()
+                          t2 = re.sub(r'(0x[0-9a-fA-F]+)[uU]\b', r'\1', t)
+                          t2 = re.sub(r'(\b[0-9]+)[uU]\b', r'\1', t2)
+                          if t != t2:
+                              open(fpath, 'w').write(t2)
+                              print(f'PATCHED {fpath} (removed u suffix)')
+                      except: pass
+          # Also fix scsiglue.c and its local headers directly
+          for root, dirs, files in os.walk('drivers/usb/storage'):
+              for fname in files:
+                  if fname.endswith(('.c', '.h')):
+                      fpath = os.path.join(root, fname)
+                      try:
+                          t = open(fpath).read()
+                          t2 = re.sub(r'(0x[0-9a-fA-F]+)[uU]\b', r'\1', t)
+                          t2 = re.sub(r'(\b[0-9]+)[uU]\b', r'\1', t2)
+                          if t != t2:
+                              open(fpath, 'w').write(t2)
+                              print(f'PATCHED {fpath} (removed u suffix)')
+                      except: pass
+          print()
           print('=== DELETING GCC PLUGINS ===')
           for root, dirs, files in os.walk('scripts'):
               for fname in files:
