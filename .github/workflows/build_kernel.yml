@@ -151,12 +151,16 @@ jobs:
                   decls = '\tstruct sock *sk = sock->sk;\n\tvoid __user *argp = (void __user *)arg;\n\tint err = 0;\n'
                   hlines.insert(ioctl_brace+1, decls)
                   print(f'PATCHED {hci} (added declarations at line {ioctl_brace+2})')
-                  # Fix 2: find bare */ WITHIN the function (after our insert, search from ioctl_brace+4)
-                  for i in range(ioctl_brace+4, min(ioctl_brace+300, len(hlines))):
+                  # Fix 2: patch ALL bare */ lines in the function (no break)
+                  fixed_count = 0
+                  for i in range(ioctl_brace+4, min(ioctl_brace+400, len(hlines))):
+                      if hlines[i].rstrip() == '}' and not hlines[i].startswith('\t\t'):
+                          break
                       if hlines[i].strip() == '*/':
                           hlines[i] = '/* (patched) */\n'
                           print(f'PATCHED {hci} (bare comment end at line {i+1})')
-                          break
+                          fixed_count += 1
+                  print(f'Fixed {fixed_count} bare */ lines in hci_sock_ioctl')
               else:
                   print(f'SKIP {hci} (hci_sock_ioctl not found)')
               open(hci, 'w').writelines(hlines)
