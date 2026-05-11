@@ -323,8 +323,8 @@ make O=out stealth_defconfig
 sed -i 's/CONFIG_WERROR=y/CONFIG_WERROR=n/' out/.config
 sed -i 's/CONFIG_GCC_PLUGINS=y/# CONFIG_GCC_PLUGINS is not set/' out/.config
 
-NPROC=$(nproc)
-echo -e "Building with ${CYAN}$NPROC${NC} cores..."
+NPROC=4
+echo -e "Building with ${CYAN}$NPROC${NC} cores (limited to avoid overheating)..."
 make O=out -j"$NPROC" KCFLAGS="-w" Image 2>&1 | tee build.log
 
 if [ -f out/arch/arm64/boot/Image ]; then
