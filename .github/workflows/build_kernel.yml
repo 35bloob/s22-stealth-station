@@ -52,7 +52,17 @@ jobs:
           REAL_GCC=$(which aarch64-linux-gnu-gcc)
           echo "Real GCC at: $REAL_GCC"
           sudo cp "$REAL_GCC" "${REAL_GCC}.real"
-          printf '#!/bin/bash\nexec "${0}.real" "$@" -w -Wno-error\n' | sudo tee "$REAL_GCC" > /dev/null
+          # Smart wrapper: only add -w -Wno-error for C compilation,
+          # skip extra flags when assembling (.s/.S) to avoid confusing `as`
+          cat << 'WRAPPER' | sudo tee "$REAL_GCC" > /dev/null
+          #!/bin/bash
+          for a in "$@"; do
+            case "$a" in
+              *.s|*.S|-x) exec "${0}.real" "$@" ;;
+            esac
+          done
+          exec "${0}.real" "$@" -w -Wno-error
+          WRAPPER
           sudo chmod +x "$REAL_GCC"
           echo "Wrapper installed. Test:"
           aarch64-linux-gnu-gcc --version | head -1
@@ -222,41 +232,36 @@ jobs:
                               print(f'CLEANED: {fpath}')
                       except: pass
           print()
-          print('=== FIX SAMSUNG u SUFFIX IN ALL HEADERS ===')
-          # Samsung adds u/U suffix to hex/decimal constants in headers;
-          # these leak into inline asm (brk, BUG_ON, WARN) causing
-          # 'junk at end of line' assembler errors
-          # Nuclear approach: patch ALL .h files under include/ and arch/
+          print('=== FIX SAMSUNG u/U/UL/ULL SUFFIX — FULL TREE ===')
+          # Samsung adds u/U/UL/ULL suffixes to hex/decimal constants;
+          # these leak into inline asm via __stringify() in BUG_ON/WARN/brk
+          # macros, causing 'junk at end of line' assembler errors.
+          # Previous fix only scanned include/ and arch/arm64/include/ —
+          # but the constants can be defined ANYWHERE in the tree.
+          # Fix: scan EVERY .h file in the entire kernel source tree,
+          # and strip ALL integer type suffixes (u, U, ul, UL, ull, ULL,
+          # lu, LU, llu, LLU, l, L, ll, LL).
+          import re as _re
+          _suffix_hex = _re.compile(r'(0x[0-9a-fA-F]+)[uUlL]+\b')
+          _suffix_dec = _re.compile(r'(\b[0-9]+)[uUlL]+\b')
           count = 0
-          for scan_dir in ['arch/arm64/include', 'include']:
-              for root, dirs, files in os.walk(scan_dir):
-                  for fname in files:
-                      if fname.endswith('.h'):
-                          fpath = os.path.join(root, fname)
-                          try:
-                              t = open(fpath).read()
-                              t2 = re.sub(r'(0x[0-9a-fA-F]+)[uU]\b', r'\1', t)
-                              t2 = re.sub(r'(\b[0-9]+)[uU]\b', r'\1', t2)
-                              if t != t2:
-                                  open(fpath, 'w').write(t2)
-                                  count += 1
-                          except: pass
-          print(f'Stripped u/U suffix from {count} header files')
-          # Also fix driver source files directly
-          for scan_dir in ['drivers/usb/storage', 'drivers/scsi']:
-              for root, dirs, files in os.walk(scan_dir):
-                  for fname in files:
-                      if fname.endswith(('.c', '.h')):
-                          fpath = os.path.join(root, fname)
-                          try:
-                              t = open(fpath).read()
-                              t2 = re.sub(r'(0x[0-9a-fA-F]+)[uU]\b', r'\1', t)
-                              t2 = re.sub(r'(\b[0-9]+)[uU]\b', r'\1', t2)
-                              if t != t2:
-                                  open(fpath, 'w').write(t2)
-                                  count += 1
-                          except: pass
-          print(f'Total files patched: {count}')
+          for root, dirs, files in os.walk('.'):
+              # Skip .git and build output
+              if '.git' in root.split(os.sep) or '/out' in root:
+                  continue
+              for fname in files:
+                  if not fname.endswith(('.h', '.c', '.S')):
+                      continue
+                  fpath = os.path.join(root, fname)
+                  try:
+                      t = open(fpath).read()
+                      t2 = _suffix_hex.sub(r'\1', t)
+                      t2 = _suffix_dec.sub(r'\1', t2)
+                      if t != t2:
+                          open(fpath, 'w').write(t2)
+                          count += 1
+                  except: pass
+          print(f'Stripped integer type suffixes from {count} files (full tree scan)')
           print()
           print('=== DELETING GCC PLUGINS ===')
           for root, dirs, files in os.walk('scripts'):
