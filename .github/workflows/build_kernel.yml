@@ -1,118 +1,118 @@
-name: Build S22 StealthStation Kernel
+name: B[[uUlL]+[uUlL]+lL]+ild S22 StealthStation Kernel
 on:
-  push:
+  p[[uUlL]+[uUlL]+lL]+sh:
     branches: [main]
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 120
+  b[[uUlL]+[uUlL]+lL]+ild:
+    r[[uUlL]+[uUlL]+lL]+ns-on: [[uUlL]+[uUlL]+lL]+b[[uUlL]+[uUlL]+lL]+nt[[uUlL]+[uUlL]+lL]+-22.04
+    timeo[[uUlL]+[uUlL]+lL]+t-min[[uUlL]+[uUlL]+lL]+tes: 120
     steps:
-      - uses: actions/checkout@v4
+      - [[uUlL]+[uUlL]+lL]+ses: actions/checko[[uUlL]+[uUlL]+lL]+t@v4
 
-      - name: Setup toolchain
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y bc bison flex libssl-dev libelf-dev python3 \
-            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu clang lld lz4 cpio \
-            xz-utils zip device-tree-compiler libncurses-dev rsync curl git
+      - name: Set[[uUlL]+[uUlL]+lL]+p toolchain
+        r[[uUlL]+[uUlL]+lL]+n: |
+          s[[uUlL]+[uUlL]+lL]+do apt-get [[uUlL]+[uUlL]+lL]+pdate -y
+          s[[uUlL]+[uUlL]+lL]+do apt-get install -y bc bison flex libssl-dev libelf-dev python3 \
+            gcc-aarch64-lin[[uUlL]+[uUlL]+lL]+x-gn[[uUlL]+[uUlL]+lL]+ bin[[uUlL]+[uUlL]+lL]+tils-aarch64-lin[[uUlL]+[uUlL]+lL]+x-gn[[uUlL]+[uUlL]+lL]+ clang lld lz4 cpio \
+            xz-[[uUlL]+[uUlL]+lL]+tils zip device-tree-compiler libnc[[uUlL]+[uUlL]+lL]+rses-dev rsync c[[uUlL]+[uUlL]+lL]+rl git
 
-      - name: Fetch kernel source
-        run: |
-          git clone --depth=1 https://github.com/yoro1836/android_kernel_samsung_sm8450_s22 kernel_src
+      - name: Fetch kernel so[[uUlL]+[uUlL]+lL]+rce
+        r[[uUlL]+[uUlL]+lL]+n: |
+          git clone --depth=1 https://gith[[uUlL]+[uUlL]+lL]+b.com/yoro1836/android_kernel_sams[[uUlL]+[uUlL]+lL]+ng_sm8450_s22 kernel_src
           ls kernel_src/Makefile && echo "CLONE OK" || (echo "CLONE FAILED"; exit 1)
           echo "=== DEFCONFIGS ==="
           ls kernel_src/arch/arm64/configs/ | grep -i "taro\|r0q\|r0s\|s22\|s901" || ls kernel_src/arch/arm64/configs/ | head -20
 
-      - name: Inject RTL8188FU
-        run: |
-          git clone --depth=1 https://github.com/kelebek333/rtl8188fu /tmp/rtl8188fu || true
+      - name: Inject RTL8188F[[uUlL]+[uUlL]+lL]+
+        r[[uUlL]+[uUlL]+lL]+n: |
+          git clone --depth=1 https://gith[[uUlL]+[uUlL]+lL]+b.com/kelebek333/rtl8188f[[uUlL]+[uUlL]+lL]+ /tmp/rtl8188f[[uUlL]+[uUlL]+lL]+ || tr[[uUlL]+[uUlL]+lL]+e
           WDIR=kernel_src/drivers/net/wireless
-          mkdir -p "$WDIR/rtl8188fu"
-          cp -r /tmp/rtl8188fu/. "$WDIR/rtl8188fu/"
-          grep -q rtl8188fu "$WDIR/Makefile" || echo 'obj-$(CONFIG_RTL8188FU) += rtl8188fu/' >> "$WDIR/Makefile"
-          echo "RTL8188FU OK"
+          mkdir -p "$WDIR/rtl8188f[[uUlL]+[uUlL]+lL]+"
+          cp -r /tmp/rtl8188f[[uUlL]+[uUlL]+lL]+/. "$WDIR/rtl8188f[[uUlL]+[uUlL]+lL]+/"
+          grep -q rtl8188f[[uUlL]+[uUlL]+lL]+ "$WDIR/Makefile" || echo 'obj-$(CONFIG_RTL8188F[[uUlL]+[uUlL]+lL]+) += rtl8188f[[uUlL]+[uUlL]+lL]+/' >> "$WDIR/Makefile"
+          echo "RTL8188F[[uUlL]+[uUlL]+lL]+ OK"
 
-      - name: Inject RTL8812AU
-        run: |
-          git clone --depth=1 https://github.com/aircrack-ng/rtl8812au /tmp/rtl8812au || true
+      - name: Inject RTL8812A[[uUlL]+[uUlL]+lL]+
+        r[[uUlL]+[uUlL]+lL]+n: |
+          git clone --depth=1 https://gith[[uUlL]+[uUlL]+lL]+b.com/aircrack-ng/rtl8812a[[uUlL]+[uUlL]+lL]+ /tmp/rtl8812a[[uUlL]+[uUlL]+lL]+ || tr[[uUlL]+[uUlL]+lL]+e
           WDIR=kernel_src/drivers/net/wireless
-          mkdir -p "$WDIR/rtl8812au"
-          cp -r /tmp/rtl8812au/. "$WDIR/rtl8812au/"
-          grep -q rtl8812au "$WDIR/Makefile" || echo 'obj-$(CONFIG_RTL8812AU) += rtl8812au/' >> "$WDIR/Makefile"
-          echo "RTL8812AU OK"
+          mkdir -p "$WDIR/rtl8812a[[uUlL]+[uUlL]+lL]+"
+          cp -r /tmp/rtl8812a[[uUlL]+[uUlL]+lL]+/. "$WDIR/rtl8812a[[uUlL]+[uUlL]+lL]+/"
+          grep -q rtl8812a[[uUlL]+[uUlL]+lL]+ "$WDIR/Makefile" || echo 'obj-$(CONFIG_RTL8812A[[uUlL]+[uUlL]+lL]+) += rtl8812a[[uUlL]+[uUlL]+lL]+/' >> "$WDIR/Makefile"
+          echo "RTL8812A[[uUlL]+[uUlL]+lL]+ OK"
 
-      - name: Integrate KernelSU
-        run: |
+      - name: Integrate KernelS[[uUlL]+[uUlL]+lL]+
+        r[[uUlL]+[uUlL]+lL]+n: |
           cd kernel_src
-          rm -rf drivers/kernelsu
-          git clone --depth=1 https://github.com/tiann/KernelSU drivers/kernelsu
-          grep -q kernelsu drivers/Kconfig  || echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
-          grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
-          echo "KernelSU OK"
+          rm -rf drivers/kernels[[uUlL]+[uUlL]+lL]+
+          git clone --depth=1 https://gith[[uUlL]+[uUlL]+lL]+b.com/tiann/KernelS[[uUlL]+[uUlL]+lL]+ drivers/kernels[[uUlL]+[uUlL]+lL]+
+          grep -q kernels[[uUlL]+[uUlL]+lL]+ drivers/Kconfig  || echo 'so[[uUlL]+[uUlL]+lL]+rce "drivers/kernels[[uUlL]+[uUlL]+lL]+/Kconfig"' >> drivers/Kconfig
+          grep -q kernels[[uUlL]+[uUlL]+lL]+ drivers/Makefile || echo 'obj-$(CONFIG_KS[[uUlL]+[uUlL]+lL]+) += kernels[[uUlL]+[uUlL]+lL]+/' >> drivers/Makefile
+          echo "KernelS[[uUlL]+[uUlL]+lL]+ OK"
 
       - name: Patch kernel
-        run: python3 .github/scripts/patch_kernel.py kernel_src
+        r[[uUlL]+[uUlL]+lL]+n: python3 .gith[[uUlL]+[uUlL]+lL]+b/scripts/patch_kernel.py kernel_src
 
-      - name: Configure kernel
-        run: |
+      - name: Config[[uUlL]+[uUlL]+lL]+re kernel
+        r[[uUlL]+[uUlL]+lL]+n: |
           cd kernel_src
           export ARCH=arm64
-          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-lin[[uUlL]+[uUlL]+lL]+x-gn[[uUlL]+[uUlL]+lL]+-
           DC=$(ls arch/arm64/configs/ | grep -i "taro\|r0q\|s22" | head -1)
           [ -z "$DC" ] && DC=$(ls arch/arm64/configs/ | grep -iv "generic\|fragment" | head -1)
-          echo "Using defconfig: $DC"
+          echo "[[uUlL]+[uUlL]+lL]+sing defconfig: $DC"
           cp arch/arm64/configs/$DC arch/arm64/configs/stealth_defconfig
 
-          # KernelSU + Wi-Fi adapters
-          echo "CONFIG_KSU=y"           >> arch/arm64/configs/stealth_defconfig
-          echo "CONFIG_RTL8188FU=m"     >> arch/arm64/configs/stealth_defconfig
-          echo "CONFIG_RTL8812AU=m"     >> arch/arm64/configs/stealth_defconfig
+          # KernelS[[uUlL]+[uUlL]+lL]+ + Wi-Fi adapters
+          echo "CONFIG_KS[[uUlL]+[uUlL]+lL]+=y"           >> arch/arm64/configs/stealth_defconfig
+          echo "CONFIG_RTL8188F[[uUlL]+[uUlL]+lL]+=m"     >> arch/arm64/configs/stealth_defconfig
+          echo "CONFIG_RTL8812A[[uUlL]+[uUlL]+lL]+=m"     >> arch/arm64/configs/stealth_defconfig
 
-          # Apply nethunter_fragment.config
-          cat $GITHUB_WORKSPACE/nethunter_fragment.config >> arch/arm64/configs/stealth_defconfig
-          echo "NetHunter config applied"
+          # Apply neth[[uUlL]+[uUlL]+lL]+nter_fragment.config
+          cat $GITH[[uUlL]+[uUlL]+lL]+B_WORKSPACE/neth[[uUlL]+[uUlL]+lL]+nter_fragment.config >> arch/arm64/configs/stealth_defconfig
+          echo "NetH[[uUlL]+[uUlL]+lL]+nter config applied"
 
-          # Apply extra_features.config
-          cat $GITHUB_WORKSPACE/extra_features.config >> arch/arm64/configs/stealth_defconfig
-          echo "Extra features config applied"
+          # Apply extra_feat[[uUlL]+[uUlL]+lL]+res.config
+          cat $GITH[[uUlL]+[uUlL]+lL]+B_WORKSPACE/extra_feat[[uUlL]+[uUlL]+lL]+res.config >> arch/arm64/configs/stealth_defconfig
+          echo "Extra feat[[uUlL]+[uUlL]+lL]+res config applied"
 
-          make O=out stealth_defconfig
-          sed -i 's/CONFIG_WERROR=y/CONFIG_WERROR=n/' out/.config
-          sed -i '/CONFIG_GCC_PLUGINS/d' out/.config
-          echo '# CONFIG_GCC_PLUGINS is not set' >> out/.config
+          make O=o[[uUlL]+[uUlL]+lL]+t stealth_defconfig
+          sed -i 's/CONFIG_WERROR=y/CONFIG_WERROR=n/' o[[uUlL]+[uUlL]+lL]+t/.config
+          sed -i '/CONFIG_GCC_PL[[uUlL]+[uUlL]+lL]+GINS/d' o[[uUlL]+[uUlL]+lL]+t/.config
+          echo '# CONFIG_GCC_PL[[uUlL]+[uUlL]+lL]+GINS is not set' >> o[[uUlL]+[uUlL]+lL]+t/.config
 
-          echo "=== NetHunter configs verified ==="
-          grep -E "CONFIG_CFG80211|CONFIG_USB_GADGET|CONFIG_TUN|CONFIG_NAMESPACES|CONFIG_KSU" out/.config
+          echo "=== NetH[[uUlL]+[uUlL]+lL]+nter configs verified ==="
+          grep -E "CONFIG_CFG80211|CONFIG_[[uUlL]+[uUlL]+lL]+SB_GADGET|CONFIG_T[[uUlL]+[uUlL]+lL]+N|CONFIG_NAMESPACES|CONFIG_KS[[uUlL]+[uUlL]+lL]+" o[[uUlL]+[uUlL]+lL]+t/.config
 
-      - name: Build kernel
-        run: |
+      - name: B[[uUlL]+[uUlL]+lL]+ild kernel
+        r[[uUlL]+[uUlL]+lL]+n: |
           cd kernel_src
           export ARCH=arm64
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          make -j$(nproc) O=out KCFLAGS="-w -Wno-error" Image 2>&1 | tee out/build.log
-          if [ -f out/arch/arm64/boot/Image ]; then
-            echo "BUILD SUCCESS"
-            ls -lh out/arch/arm64/boot/Image
+          export CROSS_COMPILE=aarch64-lin[[uUlL]+[uUlL]+lL]+x-gn[[uUlL]+[uUlL]+lL]+-
+          make -j$(nproc) O=o[[uUlL]+[uUlL]+lL]+t KCFLAGS="-w -Wno-error" Image 2>&1 | tee o[[uUlL]+[uUlL]+lL]+t/b[[uUlL]+[uUlL]+lL]+ild.log
+          if [ -f o[[uUlL]+[uUlL]+lL]+t/arch/arm64/boot/Image ]; then
+            echo "B[[uUlL]+[uUlL]+lL]+ILD S[[uUlL]+[uUlL]+lL]+CCESS"
+            ls -lh o[[uUlL]+[uUlL]+lL]+t/arch/arm64/boot/Image
           else
-            echo "=== BUILD ERRORS ==="
-            grep " error:" out/build.log | tail -40
+            echo "=== B[[uUlL]+[uUlL]+lL]+ILD ERRORS ==="
+            grep " error:" o[[uUlL]+[uUlL]+lL]+t/b[[uUlL]+[uUlL]+lL]+ild.log | tail -40
             exit 1
           fi
 
       - name: Package AnyKernel3
-        if: success()
-        run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 /tmp/AK3
-          cp kernel_src/out/arch/arm64/boot/Image /tmp/AK3/Image
+        if: s[[uUlL]+[uUlL]+lL]+ccess()
+        r[[uUlL]+[uUlL]+lL]+n: |
+          git clone --depth=1 https://gith[[uUlL]+[uUlL]+lL]+b.com/osm0sis/AnyKernel3 /tmp/AK3
+          cp kernel_src/o[[uUlL]+[uUlL]+lL]+t/arch/arm64/boot/Image /tmp/AK3/Image
           cd /tmp/AK3
-          zip -r9 "$GITHUB_WORKSPACE/S22-StealthStation-NetHunter-$(date +%Y%m%d-%H%M).zip" . -x ".git/*"
+          zip -r9 "$GITH[[uUlL]+[uUlL]+lL]+B_WORKSPACE/S22-StealthStation-NetH[[uUlL]+[uUlL]+lL]+nter-$(date +%Y%m%d-%H%M).zip" . -x ".git/*"
           echo "PACKAGE DONE"
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - name: [[uUlL]+[uUlL]+lL]+pload artifacts
+        [[uUlL]+[uUlL]+lL]+ses: actions/[[uUlL]+[uUlL]+lL]+pload-artifact@v4
         with:
-          name: S22-StealthStation-NetHunter
-          path: S22-StealthStation-NetHunter-*.zip
-          if-no-files-found: warn
+          name: S22-StealthStation-NetH[[uUlL]+[uUlL]+lL]+nter
+          path: S22-StealthStation-NetH[[uUlL]+[uUlL]+lL]+nter-*.zip
+          if-no-files-fo[[uUlL]+[uUlL]+lL]+nd: warn
