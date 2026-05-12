@@ -14,16 +14,21 @@ on:
         default: 'true'
         type: choice
         options: ['true','false']
+
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
       contents: write
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Deps
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install deps
         run: sudo apt-get update -qq && sudo apt-get install -y build-essential bc flex bison libssl-dev libelf-dev git curl wget zip unzip python3 device-tree-compiler gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libncurses-dev jq rsync
+
       - name: GCC wrapper
         run: |
           REAL=$(which aarch64-linux-gnu-gcc)
@@ -32,6 +37,7 @@ jobs:
 exec "${0}.real" "$@" -w -Wno-error 2>&1
 ' | sudo tee "$REAL" > /dev/null
           sudo chmod +x "$REAL"
+
       - name: Fetch source
         env:
           GH_TOKEN: ${{ github.token }}
@@ -45,20 +51,20 @@ exec "${0}.real" "$@" -w -Wno-error 2>&1
           chmod -R u+w .
           KDIR=$(find . -maxdepth 8 -type d -name "arch" 2>/dev/null | while read d; do [ -d "$d/arm64/configs" ] && echo "$d"; done | head -1 | sed 's|/arch$||')
           echo "KERNEL_DIR=$(cd "$KDIR" && pwd)" >> $GITHUB_ENV
+
       - name: KernelSU
         if: inputs.kernelsu == 'true'
         run: |
           cd "${{ env.KERNEL_DIR }}" && chmod -R u+w .
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+
       - name: Quick Patch
         run: |
           cd "${{ env.KERNEL_DIR }}" && chmod -R u+w .
-          # Fix f2fs flush_group error
           find fs/f2fs -name "data.c" -exec sed -i 's/in_group_p(F2FS_OPTION(sbi).flush_group)/0/g' {} +
-          # Remove Werror from Makefiles
           find . -name "Makefile" -exec sed -i 's/-Werror//g' {} +
-          # Strip ALL u/U/l/L suffixes from hex constants
           find arch/arm64 include drivers fs security net kernel -name "*.[ch]" -exec sed -i -E 's/(0x[0-9a-fA-F]+)[uUlL]+/\u0001/g' {} +
+
       - name: Defconfig
         run: |
           cd "${{ env.KERNEL_DIR }}"
@@ -69,6 +75,7 @@ exec "${0}.real" "$@" -w -Wno-error 2>&1
 CONFIG_WERROR=n
 # CONFIG_GCC_PLUGINS is not set
 ' >> arch/arm64/configs/stealth_defconfig
+
       - name: Compile
         run: |
           cd "${{ env.KERNEL_DIR }}"
@@ -78,6 +85,7 @@ CONFIG_WERROR=n
           sed -i 's/CONFIG_GCC_PLUGINS=y/# CONFIG_GCC_PLUGINS is not set/' out/.config
           make O=out -j$(nproc) KCFLAGS="-w -Wno-error" HOSTCFLAGS="-w -Wno-error" Image 2>&1 | tee ~/build.log
           [ -f out/arch/arm64/boot/Image ] && echo "BUILD_SUCCESS=true" >> $GITHUB_ENV || { tail -50 ~/build.log; exit 1; }
+
       - name: Package
         if: env.BUILD_SUCCESS == 'true'
         run: |
@@ -89,7 +97,9 @@ CONFIG_WERROR=n
           mkdir -p ${{ github.workspace }}/output
           cp "$ZN" ${{ github.workspace }}/output/
           echo "ZIP_NAME=$ZN" >> $GITHUB_ENV && echo "BUILD_DATE=$BD" >> $GITHUB_ENV
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
         if: env.BUILD_SUCCESS == 'true'
         with:
           name: S22-StealthStation-Kernel
