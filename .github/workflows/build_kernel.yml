@@ -14,28 +14,38 @@ jobs:
       - name: Setup toolchain
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y bc bison flex libssl-dev libelf-dev python3 \
-            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu lz4 cpio xz-utils \
-            zip device-tree-compiler libncurses-dev rsync curl git clang lld llvm
+          sudo apt-get install -y bc bison flex libssl-dev libelf-dev python3 gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu lz4 cpio xz-utils zip device-tree-compiler libncurses-dev rsync curl git clang lld llvm
 
       - name: Fetch kernel source
         run: |
-          git clone --depth=1 \
-            https://github.com/samsung-sm8450/android_kernel_samsung_sm8450 \
-            kernel_src 2>&1 | tail -5
+          git clone --depth=1 https://github.com/samsung-sm8450/android_kernel_samsung_sm8450 kernel_src 2>&1 | tail -5
           ls kernel_src/ || (echo "CLONE FAILED"; exit 1)
 
       - name: Inject RTL8188FU
         run: |
           git clone --depth=1 https://github.com/kelebek333/rtl8188fu /tmp/rtl8188fu 2>&1 || true
           WDIR=$(find kernel_src -type d -name "wireless" 2>/dev/null | grep "net/wireless" | head -1)
-          [ -n "$WDIR" ] && mkdir -p "$WDIR/rtl8188fu" && cp -r /tmp/rtl8188fu/. "$WDIR/rtl8188fu/" &&             grep -q rtl8188fu "$WDIR/Makefile" || echo 'obj-$(CONFIG_RTL8188FU) += rtl8188fu/' >> "$WDIR/Makefile" &&             echo "RTL8188FU injected" || echo "SKIP wireless dir not found"
+          if [ -n "$WDIR" ]; then
+            mkdir -p "$WDIR/rtl8188fu"
+            cp -r /tmp/rtl8188fu/. "$WDIR/rtl8188fu/"
+            grep -q rtl8188fu "$WDIR/Makefile" || echo 'obj-$(CONFIG_RTL8188FU) += rtl8188fu/' >> "$WDIR/Makefile"
+            echo "RTL8188FU injected"
+          else
+            echo "SKIP: wireless dir not found"
+          fi
 
       - name: Inject RTL8812AU
         run: |
           git clone --depth=1 https://github.com/aircrack-ng/rtl8812au /tmp/rtl8812au 2>&1 || true
           WDIR=$(find kernel_src -type d -name "wireless" 2>/dev/null | grep "net/wireless" | head -1)
-          [ -n "$WDIR" ] && mkdir -p "$WDIR/rtl8812au" && cp -r /tmp/rtl8812au/. "$WDIR/rtl8812au/" &&             grep -q rtl8812au "$WDIR/Makefile" || echo 'obj-$(CONFIG_RTL8812AU) += rtl8812au/' >> "$WDIR/Makefile" &&             echo "RTL8812AU injected" || echo "SKIP wireless dir not found"
+          if [ -n "$WDIR" ]; then
+            mkdir -p "$WDIR/rtl8812au"
+            cp -r /tmp/rtl8812au/. "$WDIR/rtl8812au/"
+            grep -q rtl8812au "$WDIR/Makefile" || echo 'obj-$(CONFIG_RTL8812AU) += rtl8812au/' >> "$WDIR/Makefile"
+            echo "RTL8812AU injected"
+          else
+            echo "SKIP: wireless dir not found"
+          fi
 
       - name: Integrate KernelSU
         run: |
@@ -62,8 +72,8 @@ jobs:
           [ -z "$DC" ] && DC=$(find arch/arm64/configs -name "*defconfig" | head -1)
           echo "defconfig: $DC"
           cp "$DC" arch/arm64/configs/stealth_defconfig
-          [ -f "$GITHUB_WORKSPACE/.github/configs/nethunter_fragment.config" ] &&             cat "$GITHUB_WORKSPACE/.github/configs/nethunter_fragment.config" >> arch/arm64/configs/stealth_defconfig
-          [ -f "$GITHUB_WORKSPACE/.github/configs/extra_features.config" ] &&             cat "$GITHUB_WORKSPACE/.github/configs/extra_features.config" >> arch/arm64/configs/stealth_defconfig
+          [ -f "$GITHUB_WORKSPACE/.github/configs/nethunter_fragment.config" ] && cat "$GITHUB_WORKSPACE/.github/configs/nethunter_fragment.config" >> arch/arm64/configs/stealth_defconfig
+          [ -f "$GITHUB_WORKSPACE/.github/configs/extra_features.config" ] && cat "$GITHUB_WORKSPACE/.github/configs/extra_features.config" >> arch/arm64/configs/stealth_defconfig
           make O=out stealth_defconfig
           sed -i 's/CONFIG_WERROR=y/CONFIG_WERROR=n/' out/.config
           sed -i '/CONFIG_GCC_PLUGINS/d' out/.config
@@ -93,24 +103,9 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 /tmp/AK3 2>&1 || true
           IMG=$(find . -name "Image" -path "*/arm64/boot/*" 2>/dev/null | head -1)
-          [ -z "$IMG" ] && echo "No Image found" && exit 0
+          [ -z "$IMG" ] && echo "No Image" && exit 0
           cp "$IMG" /tmp/AK3/Image
-          cat > /tmp/AK3/anykernel.sh << 'AK'
-properties() { '
-kernel.string=S22 StealthStation NetHunter+KernelSU
-do.devicecheck=0
-do.modules=0
-do.systemless=1
-do.cleanup=1
-device.name1=dm1s
-device.name2=s22
-'; }
-block=/dev/block/bootdevice/by-name/boot
-is_slot_device=1
-ramdisk_compression=auto
-. tools/ak3-core.sh
-. tools/install.sh
-AK
+          printf 'properties() { '"'"'kernel.string=S22 StealthStation NetHunter+KernelSUdo.devicecheck=0do.modules=0do.systemless=1do.cleanup=1device.name1=dm1sdevice.name2=s22'"'"'; }block=/dev/block/bootdevice/by-name/bootis_slot_device=1ramdisk_compression=auto. tools/ak3-core.sh. tools/install.sh' > /tmp/AK3/anykernel.sh
           cd /tmp/AK3
           zip -r9 "$GITHUB_WORKSPACE/S22-StealthStation-$(date +%Y%m%d-%H%M).zip" . -x ".git/*"
           echo "ZIP ready"
