@@ -14,17 +14,16 @@ jobs:
       - name: Setup toolchain
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y bc bison flex libssl-dev libelf-dev python3 gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu lz4 cpio xz-utils zip device-tree-compiler libncurses-dev rsync curl git clang lld llvm
+          sudo apt-get install -y bc bison flex libssl-dev libelf-dev python3 \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu lz4 cpio xz-utils \
+            zip device-tree-compiler libncurses-dev rsync curl git
 
       - name: Fetch kernel source
         run: |
-          git clone --depth=1 --no-tags \
-            https://x-access-token:${{ github.token }}@github.com/samsung-sm8450/android_kernel_samsung_sm8450 \
-            kernel_src 2>&1 | tail -10 || \
-          git clone --depth=1 --no-tags \
-            https://github.com/samsung-sm8450/android_kernel_samsung_sm8450 \
-            kernel_src 2>&1 | tail -10 || true
-          ls kernel_src/ && echo "SOURCE OK" || (echo "CLONE FAILED"; exit 1)
+          git clone --depth=1 \
+            https://github.com/samsung-sm8450-dev/android_kernel_samsung_sm8450 \
+            kernel_src 2>&1 | tail -10
+          ls kernel_src/Makefile && echo "CLONE OK" || (echo "CLONE FAILED"; exit 1)
 
       - name: Inject RTL8188FU
         run: |
@@ -36,7 +35,7 @@ jobs:
             grep -q rtl8188fu "$WDIR/Makefile" || echo 'obj-$(CONFIG_RTL8188FU) += rtl8188fu/' >> "$WDIR/Makefile"
             echo "RTL8188FU injected"
           else
-            echo "SKIP wireless not found"
+            echo "SKIP"
           fi
 
       - name: Inject RTL8812AU
@@ -49,32 +48,32 @@ jobs:
             grep -q rtl8812au "$WDIR/Makefile" || echo 'obj-$(CONFIG_RTL8812AU) += rtl8812au/' >> "$WDIR/Makefile"
             echo "RTL8812AU injected"
           else
-            echo "SKIP wireless not found"
+            echo "SKIP"
           fi
 
       - name: Integrate KernelSU
         run: |
-          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" 2>/dev/null | head -1 | sed 's|/arch$||')
+          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" | head -1 | sed 's|/arch$||')
           [ -z "$KDIR" ] && echo "SKIP" && exit 0
           cd "$KDIR"
           curl -LSs https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh | bash - || true
 
       - name: Patch kernel
         run: |
-          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" 2>/dev/null | head -1 | sed 's|/arch$||')
+          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" | head -1 | sed 's|/arch$||')
           [ -z "$KDIR" ] && echo "SKIP" && exit 0
           python3 .github/scripts/patch_kernel.py "$KDIR"
 
       - name: Configure kernel
         run: |
-          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" 2>/dev/null | head -1 | sed 's|/arch$||')
+          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" | head -1 | sed 's|/arch$||')
           [ -z "$KDIR" ] && echo "SKIP" && exit 0
           cd "$KDIR"
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
           DC=$(find arch/arm64/configs -name "*taro*" -o -name "*kalama*" -o -name "*dm1*" 2>/dev/null | head -1)
           [ -z "$DC" ] && DC=$(find arch/arm64/configs -name "*defconfig" | head -1)
-          echo "defconfig: $DC"
+          echo "Using defconfig: $DC"
           cp "$DC" arch/arm64/configs/stealth_defconfig
           [ -f "$GITHUB_WORKSPACE/.github/configs/nethunter_fragment.config" ] && \
             cat "$GITHUB_WORKSPACE/.github/configs/nethunter_fragment.config" >> arch/arm64/configs/stealth_defconfig
@@ -88,7 +87,7 @@ jobs:
 
       - name: Build kernel
         run: |
-          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" 2>/dev/null | head -1 | sed 's|/arch$||')
+          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" | head -1 | sed 's|/arch$||')
           [ -z "$KDIR" ] && echo "SKIP" && exit 0
           cd "$KDIR"
           export ARCH=arm64
@@ -112,6 +111,7 @@ jobs:
           cp "$IMG" /tmp/AK3/Image
           cd /tmp/AK3
           zip -r9 "$GITHUB_WORKSPACE/S22-StealthStation-$(date +%Y%m%d-%H%M).zip" . -x ".git/*"
+          echo "ZIP ready"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
