@@ -14,15 +14,11 @@ jobs:
       - name: Setup toolchain
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y bc bison flex libssl-dev libelf-dev python3 \
-            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu lz4 cpio xz-utils \
-            zip device-tree-compiler libncurses-dev rsync curl git
+          sudo apt-get install -y bc bison flex libssl-dev libelf-dev python3 gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu lz4 cpio xz-utils zip device-tree-compiler libncurses-dev rsync curl git
 
       - name: Fetch kernel source
         run: |
-          git clone --depth=1 \
-            https://github.com/samsung-sm8450-dev/android_kernel_samsung_sm8450 \
-            kernel_src 2>&1 | tail -10
+          git clone --depth=1 https://github.com/samsung-sm8450-dev/android_kernel_samsung_sm8450 kernel_src 2>&1 | tail -10
           ls kernel_src/Makefile && echo "CLONE OK" || (echo "CLONE FAILED"; exit 1)
 
       - name: Inject RTL8188FU
@@ -56,7 +52,10 @@ jobs:
           KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" | head -1 | sed 's|/arch$||')
           [ -z "$KDIR" ] && echo "SKIP" && exit 0
           cd "$KDIR"
-          curl -LSs https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh | bash - || true
+          git clone --depth=1 https://github.com/tiann/KernelSU drivers/kernelsu
+          grep -q kernelsu drivers/Kconfig || echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+          grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          echo "KernelSU injected"
 
       - name: Patch kernel
         run: |
@@ -75,10 +74,9 @@ jobs:
           [ -z "$DC" ] && DC=$(find arch/arm64/configs -name "*defconfig" | head -1)
           echo "Using defconfig: $DC"
           cp "$DC" arch/arm64/configs/stealth_defconfig
-          [ -f "$GITHUB_WORKSPACE/.github/configs/nethunter_fragment.config" ] && \
-            cat "$GITHUB_WORKSPACE/.github/configs/nethunter_fragment.config" >> arch/arm64/configs/stealth_defconfig
-          [ -f "$GITHUB_WORKSPACE/.github/configs/extra_features.config" ] && \
-            cat "$GITHUB_WORKSPACE/.github/configs/extra_features.config" >> arch/arm64/configs/stealth_defconfig
+          [ -f "$GITHUB_WORKSPACE/.github/configs/nethunter_fragment.config" ] && cat "$GITHUB_WORKSPACE/.github/configs/nethunter_fragment.config" >> arch/arm64/configs/stealth_defconfig
+          [ -f "$GITHUB_WORKSPACE/.github/configs/extra_features.config" ] && cat "$GITHUB_WORKSPACE/.github/configs/extra_features.config" >> arch/arm64/configs/stealth_defconfig
+          echo "CONFIG_KSU=y" >> arch/arm64/configs/stealth_defconfig
           make O=out stealth_defconfig
           sed -i 's/CONFIG_WERROR=y/CONFIG_WERROR=n/' out/.config
           sed -i '/CONFIG_GCC_PLUGINS/d' out/.config
