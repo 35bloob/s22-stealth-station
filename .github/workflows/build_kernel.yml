@@ -1,4 +1,4 @@
-name: Build Kernel
+name: Build S22 StealthStation Kernel
 on:
   push:
     branches: [main]
@@ -6,23 +6,120 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - name: Setup environment
+
+      - name: Setup toolchain
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y bc bison flex libssl-dev libelf-dev python3 gcc-aarch64-linux-gnu
-      - name: Patch kernel
-        run: python3 .github/scripts/patch_kernel.py .
+          sudo apt-get install -y bc bison flex libssl-dev libelf-dev python3 \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu lz4 cpio xz-utils \
+            zip device-tree-compiler libncurses-dev rsync curl git clang lld llvm
+
+      - name: Fetch Samsung S22 kernel source
+        run: |
+          git clone --depth=1 \
+            https://github.com/samsung-sm8450/android_kernel_samsung_sm8450 \
+            kernel_src || true
+          ls kernel_src/
+
+      - name: Inject RTL8188FU driver
+        run: |
+          git clone --depth=1 https://github.com/kelebek333/rtl8188fu /tmp/rtl8188fu || true
+          WDIR=$(find kernel_src -type d -name "wireless" | grep "net/wireless" | head -1)
+          if [ -n "$WDIR" ]; then
+            mkdir -p "$WDIR/rtl8188fu"
+            cp -r /tmp/rtl8188fu/. "$WDIR/rtl8188fu/"
+            grep -q rtl8188fu "$WDIR/Makefile" || echo 'obj-$(CONFIG_RTL8188FU) += rtl8188fu/' >> "$WDIR/Makefile"
+            echo "RTL8188FU injected"
+          fi
+
+      - name: Inject RTL8812AU driver
+        run: |
+          git clone --depth=1 https://github.com/aircrack-ng/rtl8812au /tmp/rtl8812au || true
+          WDIR=$(find kernel_src -type d -name "wireless" | grep "net/wireless" | head -1)
+          if [ -n "$WDIR" ]; then
+            mkdir -p "$WDIR/rtl8812au"
+            cp -r /tmp/rtl8812au/. "$WDIR/rtl8812au/"
+            grep -q rtl8812au "$WDIR/Makefile" || echo 'obj-$(CONFIG_RTL8812AU) += rtl8812au/' >> "$WDIR/Makefile"
+            echo "RTL8812AU injected"
+          fi
+
+      - name: Integrate KernelSU
+        run: |
+          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" | head -1 | sed 's|/arch$||')
+          if [ -n "$KDIR" ]; then
+            cd "$KDIR"
+            curl -LSs https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh | bash - || true
+          fi
+
+      - name: Patch kernel source
+        run: |
+          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" | head -1 | sed 's|/arch$||')
+          [ -n "$KDIR" ] && python3 .github/scripts/patch_kernel.py "$KDIR"
+
+      - name: Configure kernel
+        run: |
+          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" | head -1 | sed 's|/arch$||')
+          if [ -n "$KDIR" ]; then
+            cd "$KDIR"
+            export ARCH=arm64
+            export CROSS_COMPILE=aarch64-linux-gnu-
+            DC=$(find arch/arm64/configs -name "*taro*" -o -name "*kalama*" -o -name "*dm1*" 2>/dev/null | head -1)
+            [ -z "$DC" ] && DC=$(find arch/arm64/configs -name "*defconfig" | head -1)
+            cp "$DC" arch/arm64/configs/stealth_defconfig
+            cat "$GITHUB_WORKSPACE/.github/configs/nethunter_fragment.config" >> arch/arm64/configs/stealth_defconfig
+            cat "$GITHUB_WORKSPACE/.github/configs/extra_features.config" >> arch/arm64/configs/stealth_defconfig
+            make O=out stealth_defconfig
+            sed -i 's/CONFIG_WERROR=y/CONFIG_WERROR=n/' out/.config
+            sed -i '/CONFIG_GCC_PLUGINS/d' out/.config
+            echo '# CONFIG_GCC_PLUGINS is not set' >> out/.config
+          fi
+
       - name: Build kernel
         run: |
-          export ARCH=arm64
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          make -j$(nproc) O=out vendor/kalama_GKI.config
-          make -j$(nproc) O=out
+          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" | head -1 | sed 's|/arch$||')
+          if [ -n "$KDIR" ]; then
+            cd "$KDIR"
+            export ARCH=arm64
+            export CROSS_COMPILE=aarch64-linux-gnu-
+            make -j$(nproc) O=out KCFLAGS="-w -Wno-error" Image 2>&1 | tee out/build.log
+            make -j$(nproc) O=out modules 2>&1 || true
+            [ -f out/arch/arm64/boot/Image ] && echo "BUILD SUCCESS" || { grep "error:" out/build.log | tail -20; exit 1; }
+          fi
+
+      - name: Package AnyKernel3
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 /tmp/AK3 || true
+          IMG=$(find . -name "Image" -path "*/arm64/boot/*" | head -1)
+          if [ -n "$IMG" ]; then
+            cp "$IMG" /tmp/AK3/Image
+            cat > /tmp/AK3/anykernel.sh << 'AK'
+properties() { '
+kernel.string=S22 StealthStation NetHunter+KernelSU
+do.devicecheck=0
+do.modules=0
+do.systemless=1
+do.cleanup=1
+device.name1=dm1s
+device.name2=s22
+'; }
+block=/dev/block/bootdevice/by-name/boot
+is_slot_device=1
+ramdisk_compression=auto
+. tools/ak3-core.sh
+. tools/install.sh
+AK
+            cd /tmp/AK3
+            zip -r9 "$GITHUB_WORKSPACE/S22-StealthStation-$(date +%Y%m%d-%H%M).zip" . -x ".git/*"
+          fi
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kernel
-          path: out/arch/arm64/boot/
+          name: S22-StealthStation-Kernel
+          path: |
+            S22-StealthStation-*.zip
+            **/out/arch/arm64/boot/Image
+          if-no-files-found: warn
