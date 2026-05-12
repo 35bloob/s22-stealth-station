@@ -7,6 +7,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -17,85 +18,84 @@ jobs:
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu lz4 cpio xz-utils \
             zip device-tree-compiler libncurses-dev rsync curl git clang lld llvm
 
-      - name: Fetch Samsung S22 kernel source
+      - name: Fetch kernel source
         run: |
           git clone --depth=1 \
             https://github.com/samsung-sm8450/android_kernel_samsung_sm8450 \
-            kernel_src || true
-          ls kernel_src/
+            kernel_src 2>&1 | tail -5
+          ls kernel_src/ || (echo "CLONE FAILED"; exit 1)
 
-      - name: Inject RTL8188FU driver
+      - name: Inject RTL8188FU
         run: |
-          git clone --depth=1 https://github.com/kelebek333/rtl8188fu /tmp/rtl8188fu || true
-          WDIR=$(find kernel_src -type d -name "wireless" | grep "net/wireless" | head -1)
-          if [ -n "$WDIR" ]; then
-            mkdir -p "$WDIR/rtl8188fu"
-            cp -r /tmp/rtl8188fu/. "$WDIR/rtl8188fu/"
-            grep -q rtl8188fu "$WDIR/Makefile" || echo 'obj-$(CONFIG_RTL8188FU) += rtl8188fu/' >> "$WDIR/Makefile"
-            echo "RTL8188FU injected"
-          fi
+          git clone --depth=1 https://github.com/kelebek333/rtl8188fu /tmp/rtl8188fu 2>&1 || true
+          WDIR=$(find kernel_src -type d -name "wireless" 2>/dev/null | grep "net/wireless" | head -1)
+          [ -n "$WDIR" ] && mkdir -p "$WDIR/rtl8188fu" && cp -r /tmp/rtl8188fu/. "$WDIR/rtl8188fu/" &&             grep -q rtl8188fu "$WDIR/Makefile" || echo 'obj-$(CONFIG_RTL8188FU) += rtl8188fu/' >> "$WDIR/Makefile" &&             echo "RTL8188FU injected" || echo "SKIP wireless dir not found"
 
-      - name: Inject RTL8812AU driver
+      - name: Inject RTL8812AU
         run: |
-          git clone --depth=1 https://github.com/aircrack-ng/rtl8812au /tmp/rtl8812au || true
-          WDIR=$(find kernel_src -type d -name "wireless" | grep "net/wireless" | head -1)
-          if [ -n "$WDIR" ]; then
-            mkdir -p "$WDIR/rtl8812au"
-            cp -r /tmp/rtl8812au/. "$WDIR/rtl8812au/"
-            grep -q rtl8812au "$WDIR/Makefile" || echo 'obj-$(CONFIG_RTL8812AU) += rtl8812au/' >> "$WDIR/Makefile"
-            echo "RTL8812AU injected"
-          fi
+          git clone --depth=1 https://github.com/aircrack-ng/rtl8812au /tmp/rtl8812au 2>&1 || true
+          WDIR=$(find kernel_src -type d -name "wireless" 2>/dev/null | grep "net/wireless" | head -1)
+          [ -n "$WDIR" ] && mkdir -p "$WDIR/rtl8812au" && cp -r /tmp/rtl8812au/. "$WDIR/rtl8812au/" &&             grep -q rtl8812au "$WDIR/Makefile" || echo 'obj-$(CONFIG_RTL8812AU) += rtl8812au/' >> "$WDIR/Makefile" &&             echo "RTL8812AU injected" || echo "SKIP wireless dir not found"
 
       - name: Integrate KernelSU
         run: |
-          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" | head -1 | sed 's|/arch$||')
-          if [ -n "$KDIR" ]; then
-            cd "$KDIR"
-            curl -LSs https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh | bash - || true
-          fi
+          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" 2>/dev/null | head -1 | sed 's|/arch$||')
+          [ -z "$KDIR" ] && echo "SKIP no arch dir" && exit 0
+          cd "$KDIR"
+          curl -LSs https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh | bash - 2>&1 || true
+          echo "KernelSU done"
 
-      - name: Patch kernel source
+      - name: Patch kernel
         run: |
-          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" | head -1 | sed 's|/arch$||')
-          [ -n "$KDIR" ] && python3 .github/scripts/patch_kernel.py "$KDIR"
+          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" 2>/dev/null | head -1 | sed 's|/arch$||')
+          [ -z "$KDIR" ] && echo "SKIP" && exit 0
+          python3 .github/scripts/patch_kernel.py "$KDIR"
 
       - name: Configure kernel
         run: |
-          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" | head -1 | sed 's|/arch$||')
-          if [ -n "$KDIR" ]; then
-            cd "$KDIR"
-            export ARCH=arm64
-            export CROSS_COMPILE=aarch64-linux-gnu-
-            DC=$(find arch/arm64/configs -name "*taro*" -o -name "*kalama*" -o -name "*dm1*" 2>/dev/null | head -1)
-            [ -z "$DC" ] && DC=$(find arch/arm64/configs -name "*defconfig" | head -1)
-            cp "$DC" arch/arm64/configs/stealth_defconfig
-            cat "$GITHUB_WORKSPACE/.github/configs/nethunter_fragment.config" >> arch/arm64/configs/stealth_defconfig
-            cat "$GITHUB_WORKSPACE/.github/configs/extra_features.config" >> arch/arm64/configs/stealth_defconfig
-            make O=out stealth_defconfig
-            sed -i 's/CONFIG_WERROR=y/CONFIG_WERROR=n/' out/.config
-            sed -i '/CONFIG_GCC_PLUGINS/d' out/.config
-            echo '# CONFIG_GCC_PLUGINS is not set' >> out/.config
-          fi
+          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" 2>/dev/null | head -1 | sed 's|/arch$||')
+          [ -z "$KDIR" ] && echo "SKIP" && exit 0
+          cd "$KDIR"
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          DC=$(find arch/arm64/configs -name "*taro*" -o -name "*kalama*" -o -name "*dm1*" 2>/dev/null | head -1)
+          [ -z "$DC" ] && DC=$(find arch/arm64/configs -name "*defconfig" | head -1)
+          echo "defconfig: $DC"
+          cp "$DC" arch/arm64/configs/stealth_defconfig
+          [ -f "$GITHUB_WORKSPACE/.github/configs/nethunter_fragment.config" ] &&             cat "$GITHUB_WORKSPACE/.github/configs/nethunter_fragment.config" >> arch/arm64/configs/stealth_defconfig
+          [ -f "$GITHUB_WORKSPACE/.github/configs/extra_features.config" ] &&             cat "$GITHUB_WORKSPACE/.github/configs/extra_features.config" >> arch/arm64/configs/stealth_defconfig
+          make O=out stealth_defconfig
+          sed -i 's/CONFIG_WERROR=y/CONFIG_WERROR=n/' out/.config
+          sed -i '/CONFIG_GCC_PLUGINS/d' out/.config
+          echo '# CONFIG_GCC_PLUGINS is not set' >> out/.config
+          echo "CONFIG DONE"
 
       - name: Build kernel
         run: |
-          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" | head -1 | sed 's|/arch$||')
-          if [ -n "$KDIR" ]; then
-            cd "$KDIR"
-            export ARCH=arm64
-            export CROSS_COMPILE=aarch64-linux-gnu-
-            make -j$(nproc) O=out KCFLAGS="-w -Wno-error" Image 2>&1 | tee out/build.log
-            make -j$(nproc) O=out modules 2>&1 || true
-            [ -f out/arch/arm64/boot/Image ] && echo "BUILD SUCCESS" || { grep "error:" out/build.log | tail -20; exit 1; }
+          KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" 2>/dev/null | head -1 | sed 's|/arch$||')
+          [ -z "$KDIR" ] && echo "SKIP" && exit 0
+          cd "$KDIR"
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          make -j$(nproc) O=out KCFLAGS="-w -Wno-error" Image 2>&1 | tee out/build.log
+          make -j$(nproc) O=out modules 2>&1 || true
+          if [ -f out/arch/arm64/boot/Image ]; then
+            echo "BUILD SUCCESS"
+            ls -lh out/arch/arm64/boot/Image
+          else
+            echo "=== LAST 30 ERRORS ==="
+            grep " error:" out/build.log | tail -30
+            exit 1
           fi
 
       - name: Package AnyKernel3
+        if: success()
         run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 /tmp/AK3 || true
-          IMG=$(find . -name "Image" -path "*/arm64/boot/*" | head -1)
-          if [ -n "$IMG" ]; then
-            cp "$IMG" /tmp/AK3/Image
-            cat > /tmp/AK3/anykernel.sh << 'AK'
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 /tmp/AK3 2>&1 || true
+          IMG=$(find . -name "Image" -path "*/arm64/boot/*" 2>/dev/null | head -1)
+          [ -z "$IMG" ] && echo "No Image found" && exit 0
+          cp "$IMG" /tmp/AK3/Image
+          cat > /tmp/AK3/anykernel.sh << 'AK'
 properties() { '
 kernel.string=S22 StealthStation NetHunter+KernelSU
 do.devicecheck=0
@@ -111,9 +111,9 @@ ramdisk_compression=auto
 . tools/ak3-core.sh
 . tools/install.sh
 AK
-            cd /tmp/AK3
-            zip -r9 "$GITHUB_WORKSPACE/S22-StealthStation-$(date +%Y%m%d-%H%M).zip" . -x ".git/*"
-          fi
+          cd /tmp/AK3
+          zip -r9 "$GITHUB_WORKSPACE/S22-StealthStation-$(date +%Y%m%d-%H%M).zip" . -x ".git/*"
+          echo "ZIP ready"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
