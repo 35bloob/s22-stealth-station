@@ -1,9 +1,16 @@
 name: Build S22 StealthStation Kernel
+
 on:
   workflow_dispatch:
     inputs:
       kernelsu:
-        description: 'KernelSU'
+        description: 'Enable KernelSU'
+        required: true
+        default: 'true'
+        type: choice
+        options: ['true','false']
+      extra_features:
+        description: 'Enable extra stealth features'
         required: true
         default: 'true'
         type: choice
@@ -26,7 +33,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install deps
+      - name: Install dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y build-essential bc flex bison libssl-dev libelf-dev git curl wget zip unzip python3 device-tree-compiler gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libncurses-dev jq rsync
 
       - name: GCC wrapper
@@ -38,19 +45,45 @@ exec "${0}.real" "$@" -w -Wno-error 2>&1
 ' | sudo tee "$REAL" > /dev/null
           sudo chmod +x "$REAL"
 
-      - name: Fetch source
+      - name: Fetch kernel source
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release download kernel-source --dir . --repo ${{ github.repository }} 2>/dev/null || true
           ARCHIVE=$(ls SM-*.zip 2>/dev/null | head -1)
           [ -z "$ARCHIVE" ] && ARCHIVE=$(ls *.zip 2>/dev/null | head -1)
-          [ -z "$ARCHIVE" ] && echo "Upload SM-S901E_SEA_15_Opensource.zip as release tag: kernel-source" && exit 1
+          [ -z "$ARCHIVE" ] && echo "ERROR: Upload source zip as release tag: kernel-source" && exit 1
           mkdir -p kernel_src && cd kernel_src
           unzip -q "../$ARCHIVE"
           chmod -R u+w .
           KDIR=$(find . -maxdepth 8 -type d -name "arch" 2>/dev/null | while read d; do [ -d "$d/arm64/configs" ] && echo "$d"; done | head -1 | sed 's|/arch$||')
           echo "KERNEL_DIR=$(cd "$KDIR" && pwd)" >> $GITHUB_ENV
+
+      - name: Inject RTL8188FU
+        run: |
+          cd "${{ env.KERNEL_DIR }}"
+          git clone --depth=1 https://github.com/kelebek333/rtl8188fu /tmp/rtl8188fu 2>/dev/null || true
+          if [ -d /tmp/rtl8188fu ]; then
+            mkdir -p drivers/net/wireless/rtl8188fu
+            cp -r /tmp/rtl8188fu/* drivers/net/wireless/rtl8188fu/
+            printf 'config RTL8188FU
+  tristate "Realtek RTL8188FU USB WiFi"
+  depends on USB && CFG80211
+  default m
+' > drivers/net/wireless/rtl8188fu/Kconfig
+            grep -q "rtl8188fu" drivers/net/wireless/Makefile || echo 'obj-$(CONFIG_RTL8188FU) += rtl8188fu/' >> drivers/net/wireless/Makefile
+            grep -q "rtl8188fu" drivers/net/wireless/Kconfig || echo 'source "drivers/net/wireless/rtl8188fu/Kconfig"' >> drivers/net/wireless/Kconfig
+          fi
+
+      - name: Inject RTL8812AU
+        run: |
+          cd "${{ env.KERNEL_DIR }}"
+          git clone --depth=1 https://github.com/aircrack-ng/rtl8812au /tmp/rtl8812au 2>/dev/null || true
+          if [ -d /tmp/rtl8812au ]; then
+            mkdir -p drivers/net/wireless/rtl8812au
+            cp -r /tmp/rtl8812au/* drivers/net/wireless/rtl8812au/
+            grep -q "88XXAU" drivers/net/wireless/Makefile || echo 'obj-$(CONFIG_88XXAU) += rtl8812au/' >> drivers/net/wireless/Makefile
+          fi
 
       - name: KernelSU
         if: inputs.kernelsu == 'true'
@@ -58,12 +91,14 @@ exec "${0}.real" "$@" -w -Wno-error 2>&1
           cd "${{ env.KERNEL_DIR }}" && chmod -R u+w .
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
 
-      - name: Quick Patch
+      - name: Patch C suffixes and errors
         run: |
           cd "${{ env.KERNEL_DIR }}" && chmod -R u+w .
           find fs/f2fs -name "data.c" -exec sed -i 's/in_group_p(F2FS_OPTION(sbi).flush_group)/0/g' {} +
           find . -name "Makefile" -exec sed -i 's/-Werror//g' {} +
-          find arch/arm64 include drivers fs security net kernel -name "*.[ch]" -exec sed -i -E 's/(0x[0-9a-fA-F]+)[uUlL]+/\u0001/g' {} +
+          find arch/arm64 include drivers fs security net kernel -type f -name "*.[ch]" -exec sed -i -E 's/(0x[0-9a-fA-F]+)[uUlL]+/\u0001/g' {} +
+          find arch/arm64 include drivers fs security net kernel -type f -name "*.[ch]" -exec sed -i -E 's/\b([0-9]+)[uUlL]+\b/\u0001/g' {} +
+          find scripts -name "*.so" -delete 2>/dev/null || true
 
       - name: Defconfig
         run: |
@@ -71,9 +106,17 @@ exec "${0}.real" "$@" -w -Wno-error 2>&1
           DC=$(find arch/arm64/configs -maxdepth 2 -type f -name "*s901*" 2>/dev/null | head -1)
           [ -z "$DC" ] && DC=$(find arch/arm64/configs -maxdepth 1 -type f -name '*defconfig' | head -1)
           cp "$DC" arch/arm64/configs/stealth_defconfig
+          [ -d arch/arm64/configs/vendor ] && find arch/arm64/configs/vendor -type f | sort | while read fr; do cat "$fr" >> arch/arm64/configs/stealth_defconfig; done
+          cat ${{ github.workspace }}/configs/nethunter_fragment.config >> arch/arm64/configs/stealth_defconfig || true
+          if [ "${{ inputs.extra_features }}" == "true" ]; then
+            cat ${{ github.workspace }}/configs/extra_features.config >> arch/arm64/configs/stealth_defconfig || true
+          fi
           printf '
 CONFIG_WERROR=n
 # CONFIG_GCC_PLUGINS is not set
+CONFIG_KPROBES=y
+CONFIG_HAVE_KPROBES=y
+CONFIG_KPROBE_EVENTS=y
 ' >> arch/arm64/configs/stealth_defconfig
 
       - name: Compile
@@ -90,6 +133,7 @@ CONFIG_WERROR=n
         if: env.BUILD_SUCCESS == 'true'
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 /tmp/AK3
+          cp ${{ github.workspace }}/anykernel/anykernel.sh /tmp/AK3/anykernel.sh || true
           cp "${{ env.KERNEL_DIR }}/out/arch/arm64/boot/Image" /tmp/AK3/Image
           cd /tmp/AK3 && rm -f *.md patch/sample* ramdisk/placeholder
           BD=$(date +%Y%m%d-%H%M) && ZN="S22-StealthStation-${BD}.zip"
