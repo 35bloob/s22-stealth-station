@@ -18,12 +18,17 @@ jobs:
 
       - name: Fetch kernel source
         run: |
-          git clone --depth=1 https://github.com/samsung-sm8450/android_kernel_samsung_sm8450 kernel_src 2>&1 | tail -5
-          ls kernel_src/ || (echo "CLONE FAILED"; exit 1)
+          git clone --depth=1 --no-tags \
+            https://x-access-token:${{ github.token }}@github.com/samsung-sm8450/android_kernel_samsung_sm8450 \
+            kernel_src 2>&1 | tail -10 || \
+          git clone --depth=1 --no-tags \
+            https://github.com/samsung-sm8450/android_kernel_samsung_sm8450 \
+            kernel_src 2>&1 | tail -10 || true
+          ls kernel_src/ && echo "SOURCE OK" || (echo "CLONE FAILED"; exit 1)
 
       - name: Inject RTL8188FU
         run: |
-          git clone --depth=1 https://github.com/kelebek333/rtl8188fu /tmp/rtl8188fu 2>&1 || true
+          git clone --depth=1 https://github.com/kelebek333/rtl8188fu /tmp/rtl8188fu || true
           WDIR=$(find kernel_src -type d -name "wireless" 2>/dev/null | grep "net/wireless" | head -1)
           if [ -n "$WDIR" ]; then
             mkdir -p "$WDIR/rtl8188fu"
@@ -31,12 +36,12 @@ jobs:
             grep -q rtl8188fu "$WDIR/Makefile" || echo 'obj-$(CONFIG_RTL8188FU) += rtl8188fu/' >> "$WDIR/Makefile"
             echo "RTL8188FU injected"
           else
-            echo "SKIP: wireless dir not found"
+            echo "SKIP wireless not found"
           fi
 
       - name: Inject RTL8812AU
         run: |
-          git clone --depth=1 https://github.com/aircrack-ng/rtl8812au /tmp/rtl8812au 2>&1 || true
+          git clone --depth=1 https://github.com/aircrack-ng/rtl8812au /tmp/rtl8812au || true
           WDIR=$(find kernel_src -type d -name "wireless" 2>/dev/null | grep "net/wireless" | head -1)
           if [ -n "$WDIR" ]; then
             mkdir -p "$WDIR/rtl8812au"
@@ -44,16 +49,15 @@ jobs:
             grep -q rtl8812au "$WDIR/Makefile" || echo 'obj-$(CONFIG_RTL8812AU) += rtl8812au/' >> "$WDIR/Makefile"
             echo "RTL8812AU injected"
           else
-            echo "SKIP: wireless dir not found"
+            echo "SKIP wireless not found"
           fi
 
       - name: Integrate KernelSU
         run: |
           KDIR=$(find kernel_src -maxdepth 4 -type d -name "arch" 2>/dev/null | head -1 | sed 's|/arch$||')
-          [ -z "$KDIR" ] && echo "SKIP no arch dir" && exit 0
+          [ -z "$KDIR" ] && echo "SKIP" && exit 0
           cd "$KDIR"
-          curl -LSs https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh | bash - 2>&1 || true
-          echo "KernelSU done"
+          curl -LSs https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh | bash - || true
 
       - name: Patch kernel
         run: |
@@ -72,8 +76,10 @@ jobs:
           [ -z "$DC" ] && DC=$(find arch/arm64/configs -name "*defconfig" | head -1)
           echo "defconfig: $DC"
           cp "$DC" arch/arm64/configs/stealth_defconfig
-          [ -f "$GITHUB_WORKSPACE/.github/configs/nethunter_fragment.config" ] && cat "$GITHUB_WORKSPACE/.github/configs/nethunter_fragment.config" >> arch/arm64/configs/stealth_defconfig
-          [ -f "$GITHUB_WORKSPACE/.github/configs/extra_features.config" ] && cat "$GITHUB_WORKSPACE/.github/configs/extra_features.config" >> arch/arm64/configs/stealth_defconfig
+          [ -f "$GITHUB_WORKSPACE/.github/configs/nethunter_fragment.config" ] && \
+            cat "$GITHUB_WORKSPACE/.github/configs/nethunter_fragment.config" >> arch/arm64/configs/stealth_defconfig
+          [ -f "$GITHUB_WORKSPACE/.github/configs/extra_features.config" ] && \
+            cat "$GITHUB_WORKSPACE/.github/configs/extra_features.config" >> arch/arm64/configs/stealth_defconfig
           make O=out stealth_defconfig
           sed -i 's/CONFIG_WERROR=y/CONFIG_WERROR=n/' out/.config
           sed -i '/CONFIG_GCC_PLUGINS/d' out/.config
@@ -93,7 +99,6 @@ jobs:
             echo "BUILD SUCCESS"
             ls -lh out/arch/arm64/boot/Image
           else
-            echo "=== LAST 30 ERRORS ==="
             grep " error:" out/build.log | tail -30
             exit 1
           fi
@@ -101,14 +106,12 @@ jobs:
       - name: Package AnyKernel3
         if: success()
         run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 /tmp/AK3 2>&1 || true
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 /tmp/AK3 || true
           IMG=$(find . -name "Image" -path "*/arm64/boot/*" 2>/dev/null | head -1)
-          [ -z "$IMG" ] && echo "No Image" && exit 0
+          [ -z "$IMG" ] && exit 0
           cp "$IMG" /tmp/AK3/Image
-          printf 'properties() { '"'"'kernel.string=S22 StealthStation NetHunter+KernelSUdo.devicecheck=0do.modules=0do.systemless=1do.cleanup=1device.name1=dm1sdevice.name2=s22'"'"'; }block=/dev/block/bootdevice/by-name/bootis_slot_device=1ramdisk_compression=auto. tools/ak3-core.sh. tools/install.sh' > /tmp/AK3/anykernel.sh
           cd /tmp/AK3
           zip -r9 "$GITHUB_WORKSPACE/S22-StealthStation-$(date +%Y%m%d-%H%M).zip" . -x ".git/*"
-          echo "ZIP ready"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
