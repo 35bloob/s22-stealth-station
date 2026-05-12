@@ -64,14 +64,27 @@ jobs:
           [ -z "$DC" ] && DC=$(ls arch/arm64/configs/ | grep -iv "generic\|fragment" | head -1)
           echo "Using defconfig: $DC"
           cp arch/arm64/configs/$DC arch/arm64/configs/stealth_defconfig
+
+          # KernelSU + Wi-Fi adapters
           echo "CONFIG_KSU=y"           >> arch/arm64/configs/stealth_defconfig
           echo "CONFIG_RTL8188FU=m"     >> arch/arm64/configs/stealth_defconfig
           echo "CONFIG_RTL8812AU=m"     >> arch/arm64/configs/stealth_defconfig
+
+          # Apply nethunter_fragment.config
+          cat $GITHUB_WORKSPACE/nethunter_fragment.config >> arch/arm64/configs/stealth_defconfig
+          echo "NetHunter config applied"
+
+          # Apply extra_features.config
+          cat $GITHUB_WORKSPACE/extra_features.config >> arch/arm64/configs/stealth_defconfig
+          echo "Extra features config applied"
+
           make O=out stealth_defconfig
           sed -i 's/CONFIG_WERROR=y/CONFIG_WERROR=n/' out/.config
           sed -i '/CONFIG_GCC_PLUGINS/d' out/.config
           echo '# CONFIG_GCC_PLUGINS is not set' >> out/.config
-          echo "CONFIG DONE"
+
+          echo "=== NetHunter configs verified ==="
+          grep -E "CONFIG_CFG80211|CONFIG_USB_GADGET|CONFIG_TUN|CONFIG_NAMESPACES|CONFIG_KSU" out/.config
 
       - name: Build kernel
         run: |
@@ -94,12 +107,12 @@ jobs:
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 /tmp/AK3
           cp kernel_src/out/arch/arm64/boot/Image /tmp/AK3/Image
           cd /tmp/AK3
-          zip -r9 "$GITHUB_WORKSPACE/S22-StealthStation-$(date +%Y%m%d-%H%M).zip" . -x ".git/*"
+          zip -r9 "$GITHUB_WORKSPACE/S22-StealthStation-NetHunter-$(date +%Y%m%d-%H%M).zip" . -x ".git/*"
           echo "PACKAGE DONE"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: S22-StealthStation-Kernel
-          path: S22-StealthStation-*.zip
+          name: S22-StealthStation-NetHunter
+          path: S22-StealthStation-NetHunter-*.zip
           if-no-files-found: warn
