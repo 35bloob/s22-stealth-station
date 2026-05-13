@@ -1,6 +1,9 @@
 name: Build S22 NetHunter Kernel
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       kernelsu:
@@ -139,7 +142,6 @@ exec "${0}.real" -w -Wno-error "$@"
           hci = 'net/bluetooth/hci_sock.c'
           if os.path.exists(hci):
               hlines = open(hci).readlines()
-              # Find hci_sock_ioctl function bounds
               ioctl_start = -1
               ioctl_brace = -1
               for i, hl in enumerate(hlines):
@@ -149,14 +151,12 @@ exec "${0}.real" -w -Wno-error "$@"
                       ioctl_brace = i
                       break
               if ioctl_brace >= 0:
-                  # Fix 1: add declarations right after { (always, even if inside ifdef)
                   decls = '\tstruct sock *sk = sock->sk;
 \tvoid __user *argp = (void __user *)arg;
 \tint err = 0;
 '
                   hlines.insert(ioctl_brace+1, decls)
                   print(f'PATCHED {hci} (added declarations at line {ioctl_brace+2})')
-                  # Fix 2: patch ALL bare */ lines in the function (no break)
                   fixed_count = 0
                   for i in range(ioctl_brace+4, min(ioctl_brace+400, len(hlines))):
                       if hlines[i].rstrip() == '}' and not hlines[i].startswith('\t\t'):
