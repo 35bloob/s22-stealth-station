@@ -227,7 +227,8 @@ exec "${0}.real" -w -Wno-error "$@"
                               t = re.sub(r'-Werror[=w.-]*', '', t)
                               open(fpath, 'w').write(t)
                               print(f'CLEANED: {fpath}')
-                      except: pass
+                      except:
+                          pass
           print()
           print('=== DELETING GCC PLUGINS ===')
           for root, dirs, files in os.walk('scripts'):
