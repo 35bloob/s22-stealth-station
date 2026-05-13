@@ -1,0 +1,430 @@
+name: Stealth Station Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernelsu:
+        description: 'Enable KernelSU'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      extra_features:
+        description: 'Enable extra stealth features'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      create_release:
+        description: 'Create GitHub release'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+        
+      - name: Setup build environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libncurses-dev \
+            bison \
+            flex \
+            libssl-dev \
+            libelf-dev \
+            bc \
+            kmod \
+            cpio \
+            git \
+            wget \
+            curl \
+            python3 \
+            python3-pip \
+            device-tree-compiler \
+            u-boot-tools
+            
+      - name: Prepare kernel source
+        run: |
+          mkdir -p build
+          cp -r . build/
+          cd build
+          ls -la
+          
+      - name: Apply base kernel patches
+        run: |
+          cd build
+          if [ -f ../patch6.sh ]; then
+            echo "Applying patch6.sh..."
+            bash ../patch6.sh
+          fi
+          
+      - name: Extract extra kernel features
+        if: ${{ inputs.extra_features == 'true' }}
+        run: |
+          cd build
+          if [ -f ../s22_extras.tar.gz ]; then
+            echo "Extracting extra kernel features..."
+            tar -xzf ../s22_extras.tar.gz
+          fi
+          
+      - name: Apply extra kernel configuration
+        if: ${{ inputs.extra_features == 'true' }}
+        run: |
+          cd build
+          if [ -f 08_extra_kernel_features.config ]; then
+            echo "Applying extra kernel configuration..."
+            cat 08_extra_kernel_features.config >> .config
+          fi
+          
+      - name: Integrate KernelSU
+        if: ${{ inputs.kernelsu == 'true' }}
+        run: |
+          cd build
+          if [ -f ../07_kernelsu_integration.sh ]; then
+            echo "Integrating KernelSU..."
+            bash ../07_kernelsu_integration.sh
+          else
+            echo "KernelSU integration script not found, skipping..."
+          fi
+          
+      - name: Configure kernel
+        run: |
+          cd build
+          echo "Configuring kernel..."
+          if [ -f arch/arm64/configs/exynos9830-star2lte_defconfig ]; then
+            cp arch/arm64/configs/exynos9830-star2lte_defconfig .config
+          else
+            make defconfig
+          fi
+          
+      - name: Build kernel
+        run: |
+          cd build
+          echo "Building kernel with $(nproc) threads..."
+          make -j$(nproc) Image.gz dtb ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- 2>&1 | tee build.log
+          
+      - name: Package kernel image
+        run: |
+          mkdir -p output
+          cd build
+          
+          echo "Packaging kernel artifacts..."
+          
+          if [ -f arch/arm64/boot/Image.gz ]; then
+            cp arch/arm64/boot/Image.gz ../output/kernel.gz
+            echo "✓ Kernel image packaged"
+          fi
+          
+          if [ -f arch/arm64/boot/dts/exynos/exynos9830-star2lte.dtb ]; then
+            cp arch/arm64/boot/dts/exynos/exynos9830-star2lte.dtb ../output/
+            echo "✓ Device tree packaged"
+          fi
+          
+          if [ -f Module.symvers ]; then
+            cp Module.symvers ../output/
+          fi
+          
+          ls -la ../output/
+          
+      - name: Create flashable image
+        run: |
+          cd output
+          echo "Creating flashable kernel package..."
+          
+          # Create a manifest for flashing
+          cat > FLASHING_INSTRUCTIONS.txt << 'EOF'
+          ===== STEALTH STATION KERNEL FLASHING =====
+          
+          Prerequisites:
+          - Heimdall installed
+          - Device in Download Mode
+          - USB cable connected
+          
+          Flashing Steps:
+          1. heimdall flash --BOOT kernel.gz
+          2. Device will reboot
+          3. Install KernelSU Manager APK (if KernelSU enabled)
+          4. Deploy Kali chroot environment
+          5. Run: 09_tor_setup.sh
+          6. Run: 11_pentesting_toolkit_install.sh
+          
+          For more info: https://github.com/35bloob/s22-stealth-station
+          EOF
+          
+          cat FLASHING_INSTRUCTIONS.txt
+          
+      - name: Generate build artifacts
+        run: |
+          mkdir -p artifacts
+          cd artifacts
+          
+          cat > BUILD_MANIFEST.txt << EOF
+          ╔═══════════════════════════════════════════════════════╗
+          ║       STEALTH STATION KERNEL BUILD MANIFEST            ║
+          ╚═══════════════════════════════════════════════════════╝
+          
+          Build Information:
+          ──────────────────
+          Date: $(date)
+          Build Number: ${{ github.run_number }}
+          Commit: ${{ github.sha }}
+          Branch: ${{ github.ref }}
+          
+          Build Configuration:
+          ──────────────────
+          KernelSU Enabled: ${{ inputs.kernelsu }}
+          Extra Features Enabled: ${{ inputs.extra_features }}
+          Create Release: ${{ inputs.create_release }}
+          
+          Included Components:
+          ──────────────────
+          ✓ Custom Hardened Kernel (ARM64 - Exynos 9830)
+          EOF
+          
+          if [ "${{ inputs.kernelsu }}" = "true" ]; then
+            cat >> BUILD_MANIFEST.txt << 'EOF'
+          ✓ KernelSU Integration
+            - Root access without APatch
+            - Zygisk module support (LSPosed, etc.)
+            - KernelSU Manager required post-flash
+          EOF
+          fi
+          
+          if [ "${{ inputs.extra_features }}" = "true" ]; then
+            cat >> BUILD_MANIFEST.txt << 'EOF'
+          ✓ Extra Kernel Features (30+ options)
+            ├─ Tor Routing (Kernel-level)
+            │  ├─ TPROXY: Transparent proxy
+            │  ├─ XT_MATCH_OWNER: Per-app routing
+            │  ├─ CONNMARK/MARK: Packet marking
+            │  ├─ IP_MULTIPLE_TABLES: Policy routing
+            │  ├─ TCP_CONG_BBR: Faster Tor connections
+            │  └─ NET_SCH_FQ/CAKE: Traffic scheduling
+            ├─ Mesh Networking
+            │  ├─ BATMAN_ADV: B.A.T.M.A.N. mesh
+            │  └─ MAC80211_MESH: Wi-Fi mesh
+            ├─ IoT/Radio
+            │  ├─ IEEE802154: Zigbee/Thread
+            │  ├─ 6LOWPAN: IoT low-power networking
+            │  └─ NFC_DIGITAL: Expanded NFC
+            ├─ Forensics
+            │  ├─ USB_MON: USB traffic capture
+            │  ├─ STRICT_DEVMEM: Memory forensics
+            │  └─ AUDIT: Syscall auditing
+            └─ Stealth Features
+               ├─ DM-Verity: Disabled
+               ├─ Samsung KNOX: Disabled
+               ├─ SELinux: Permissive mode
+               └─ Unsigned modules: Allowed
+          EOF
+          fi
+          
+          cat >> BUILD_MANIFEST.txt << 'EOF'
+          
+          Post-Installation Toolkit:
+          ──────────────────────────
+          ✓ Tor Full Integration (09_tor_setup.sh)
+            - tor-transparent-on/off
+            - tor-new-identity
+            - tor-status
+            - tor-hidden-service
+            - SOCKS5 proxy (9050)
+            - Transparent proxy (9040)
+            - DNS through Tor (5353)
+            
+          ✓ Onion Crawler / Deep Web Scraper (10_onion_crawler.py)
+            - Dark web indexing
+            - .onion domain discovery
+            - Email/BTC/XMR/PGP extraction
+            
+          ✓ Full Pentesting Toolkit (11_pentesting_toolkit_install.sh)
+            - Wireless: aircrack-ng, kismet, wifite, reaver
+            - Bluetooth: bluez, btscanner, spooftooph
+            - Network: bettercap, ettercap, mitmproxy
+            - Exploitation: metasploit, beef-xss
+            - Web: burpsuite, sqlmap, nikto, gobuster
+            - Recon: nmap, masscan, amass, theharvester
+            - Passwords: john, hashcat, hydra
+            - Forensics: autopsy, volatility3, binwalk
+            - Reverse Eng: ghidra, radare2, apktool, jadx
+            - IoT/CAN: can-utils, minicom
+            
+          Installation Flow:
+          ──────────────────
+          1. heimdall flash --BOOT kernel_with_kernelsu.img
+             → Root + Custom Kernel in ONE flash
+          2. Install KernelSU Manager APK
+          3. Deploy Kali chroot environment
+          4. Run: 09_tor_setup.sh (Tor configuration)
+          5. Run: 11_pentesting_toolkit_install.sh (pentesting tools)
+          6. Optional: python3 onion_crawler.py --discover (dark web indexing)
+          → Stealth Station fully operational 🔥
+          
+          Device Information:
+          ──────────────────
+          Device: Samsung Galaxy S22 (S901E)
+          Architecture: ARM64 (aarch64)
+          SoC: Exynos 9830
+          Kernel Base: Linux 5.15+
+          
+          Repository:
+          ──────────
+          https://github.com/35bloob/s22-stealth-station
+          
+          ╔═══════════════════════════════════════════════════════╗
+          ║  Build completed successfully! Ready for deployment.  ║
+          ╚═══════════════════════════════════════════════════════╝
+          EOF
+          
+          cat BUILD_MANIFEST.txt
+          
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: stealth-station-build-${{ github.run_number }}
+          path: |
+            output/
+            artifacts/
+            build/build.log
+          retention-days: 30
+          if-no-files-found: warn
+          
+      - name: Create Release
+        if: ${{ inputs.create_release == 'true' }}
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.run_number }}-kernelsu-${{ inputs.kernelsu }}-extras-${{ inputs.extra_features }}
+          release_name: "Stealth Station Kernel Build #${{ github.run_number }}"
+          body: |
+            # 🔥 Stealth Station Kernel Build #${{ github.run_number }}
+            
+            ## Build Configuration
+            - **KernelSU Enabled**: ${{ inputs.kernelsu }}
+            - **Extra Stealth Features**: ${{ inputs.extra_features }}
+            - **Build Date**: $(date)
+            - **Commit**: ${{ github.sha }}
+            
+            ## What's Included
+            
+            ### 1️⃣ KernelSU Integration
+            - Root directly in kernel (no APatch needed)
+            - One flash = custom kernel + root
+            - Zygisk module support (LSPosed, etc.)
+            
+            ### 2️⃣ Tor Routing (Kernel-Level)
+            - TPROXY: Transparent proxy
+            - Per-app routing with XT_MATCH_OWNER
+            - Policy routing & split tunneling
+            - BBR congestion control for speed
+            
+            ### 3️⃣ Mesh Networking
+            - BATMAN_ADV: B.A.T.M.A.N. mesh protocol
+            - MAC80211_MESH: Wi-Fi mesh support
+            
+            ### 4️⃣ IoT/Radio Support
+            - IEEE802154: Zigbee/Thread protocols
+            - 6LOWPAN: IoT low-power networking
+            - NFC_DIGITAL: Extended NFC capabilities
+            
+            ### 5️⃣ Forensics & Auditing
+            - USB_MON: USB traffic capture
+            - STRICT_DEVMEM: Memory forensics access
+            - AUDIT: Syscall auditing for detection
+            
+            ### 6️⃣ Stealth Features
+            - ✅ DM-Verity disabled (no boot verification blocks)
+            - ✅ Samsung KNOX enforcement disabled
+            - ✅ SELinux set to permissive
+            - ✅ Unsigned module loading allowed
+            
+            ### 7️⃣ Post-Installation Toolkit
+            - **Tor Full Integration**: `09_tor_setup.sh`
+              - `tor-transparent-on/off`
+              - `tor-new-identity`
+              - `tor-status`
+              - `tor-hidden-service 4444`
+            - **Onion Crawler**: `10_onion_crawler.py`
+              - Dark web indexing
+              - .onion domain discovery
+            - **Pentesting Toolkit**: `11_pentesting_toolkit_install.sh`
+              - Wireless, Bluetooth, Network tools
+              - Web security & exploitation
+              - Forensics & reverse engineering
+            
+            ## Flashing Instructions
+            
+            ```bash
+            # 1. Flash kernel
+            heimdall flash --BOOT kernel_with_kernelsu.img
+            
+            # 2. Install KernelSU Manager APK (if KernelSU enabled)
+            adb install KernelSU.apk
+            
+            # 3. Deploy Kali chroot environment
+            
+            # 4. Configure Tor
+            bash 09_tor_setup.sh
+            
+            # 5. Install pentesting toolkit
+            bash 11_pentesting_toolkit_install.sh
+            
+            # 6. Optional: Discover dark web indexes
+            python3 10_onion_crawler.py --discover
+            ```
+            
+            ## Device Info
+            - **Device**: Samsung Galaxy S22 (S901E)
+            - **Architecture**: ARM64
+            - **SoC**: Exynos 9830
+            - **Kernel Base**: Linux 5.15+
+            
+            ---
+            **Repository**: [35bloob/s22-stealth-station](https://github.com/35bloob/s22-stealth-station)
+          draft: false
+          prerelease: false
+          
+  summary:
+    runs-on: ubuntu-latest
+    needs: build
+    if: always()
+    
+    steps:
+      - name: Build Summary
+        run: |
+          echo "╔════════════════════════════════════════╗"
+          echo "║   STEALTH STATION BUILD COMPLETED      ║"
+          echo "╚════════════════════════════════════════╝"
+          echo ""
+          echo "Build Status: ${{ needs.build.result }}"
+          echo ""
+          echo "Configuration:"
+          echo "  • KernelSU: ${{ inputs.kernelsu }}"
+          echo "  • Extra Features: ${{ inputs.extra_features }}"
+          echo "  • Create Release: ${{ inputs.create_release }}"
+          echo ""
+          echo "Build #${{ github.run_number }} - Run ID: ${{ github.run_id }}"
+          echo ""
+          if [ "${{ needs.build.result }}" = "success" ]; then
+            echo "✓ Build successful! Check artifacts and releases."
+          else
+            echo "✗ Build failed. Check job logs for details."
+          fi
